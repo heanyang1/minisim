@@ -33,9 +33,9 @@ elabTests = TestList
   , "driver: constant adapts to width" ~: do
       d <- okD "sim 4\nwire w[4]; assign w = 5"
       dDrivers d M.! "w" @?= IConstV [B1, B0, B1, B0]
-  , "driver: constant on 1-bit is truncated" ~: do
-      d <- okD "sim 4\nwire w = 2"
-      dDrivers d M.! "w" @?= IConstV [B0]
+  , "driver: 1-bit constant" ~: do
+      d <- okD "sim 4\nwire w = 1"
+      dDrivers d M.! "w" @?= IConstV [B1]
   , "driver: bit assigns become ICat with x holes" ~: do
       d <- okD "sim 4\nwire w[3]; assign w[1] = 1"
       dDrivers d M.! "w" @?= ICat [IConstV [BX], IConstV [B1], IConstV [BX]]
@@ -107,6 +107,17 @@ elabTests = TestList
       expectLeft "cannot determine the simulation length" "wire q = 1"
   , "err: sim must be >= 1" ~: expectLeft "at least 1" "sim 0\nwire w"
   , "err: zero width" ~: expectLeft "bad width" "wire w[0]"
+  , "err: constant too large for 1-bit wire" ~:
+      expectLeft "constant 2 does not fit in 1 bit" "wire w = 2"
+  , "err: constant too large for a bit assign" ~:
+      expectLeft "constant 2 does not fit in 1 bit" "wire w[3]; assign w[1] = 2"
+  , "err: constant too large for the wire width" ~:
+      expectLeft "constant 5 does not fit in 2 bits" "wire w[2] = 5"
+  , "err: constant too large in a value list" ~:
+      expectLeft "constant 5 does not fit in 2 bits" "wire w[2] = 1, 5"
+  , "err: constant too large for a component port" ~:
+      expectLeft "constant 2 does not fit in 1 bit"
+        "sim 4\ndef f(A) -> Y: return A\nwire w = f(2)"
   , "err: port clashes with output" ~:
       expectLeft "clashes with the output" "def f(A) -> A: return A"
   , "err: multiple result statements" ~:

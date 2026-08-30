@@ -21,7 +21,7 @@ assign w3 = c1 ? w1 & w2[0] : !00010 # Allow C-like expressions with (at least) 
 assign w5[1] = w3 # Allow bit select
 wire w6 = w1 # Shorthand for defining and assigning wires
 # assign w1 = 010100 # Error: you can only assign to a bit once.
-assign w5[2] = 2 # You can assign to different bit of an array in different statements.
+assign w5[2] = 1 # You can assign to different bit of an array in different statements.
 
 # All statement above can only be in one line. You can use `;` to merge two statement in one line:
 wire a=10;wire b=a

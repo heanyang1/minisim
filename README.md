@@ -64,7 +64,10 @@ wires, constants (`13`, `0x11`) and bit-sequences.
 * **Bit-sequence literal**: two or more digits of `0`/`1` only (`1010000`) --
   the n-th digit is the value at timestamp n, padded with `0` afterwards.
 * **Constant**: anything else, including single `0`/`1` and hex `0x..`.
-  Constants adapt to the width of their context (zero-extended / truncated).
+  Constants adapt to the width of their context: they are zero-extended when
+  the context is wider, but a constant that does not fit the required width
+  (e.g. `assign w5[2] = 2`, where the target is a single bit) is an error --
+  values are never silently truncated.
 * Binary operators work bitwise; the narrower operand is zero-extended to the
   wider one. `!` (logical not) yields 1 bit, `~` (bitwise not) keeps the width.
 * Assignments require matching widths (except constants, which adapt).
@@ -125,6 +128,8 @@ components, e.g. `def stage(D) -> Q: return dff(D, c1)`).
 * Added the `sim N` statement to set the simulation length explicitly.
 * Single `0`/`1` are constants; only 2+ digit `0`/`1` runs are waveforms
   (otherwise `wire a = 1` would silently mean "one timestamp long").
+* Fixed the `assign w5[2] = 2` typo in `sample.txt` (`2` does not fit a single
+  bit; it is now `= 1`).
 * Bit-select indices are constants; unassigned bits simulate as `x` (a warning
   is printed).
 

@@ -93,6 +93,14 @@ freshId = do
 constBits :: Integer -> Int -> [Bit]
 constBits n w = [if (n `div` (2 ^ i)) `mod` 2 == 1 then B1 else B0 | i <- [0 .. w - 1]]
 
+-- | A constant assigned to a fixed-width context must be representable in
+-- that width; it is an error if it does not fit (it is never truncated).
+checkConstFits :: Integer -> Int -> E ()
+checkConstFits n w =
+  when (n >= 2 ^ w) $
+    err ("constant " ++ show n ++ " does not fit in " ++ show w
+         ++ (if w == 1 then " bit" else " bits"))
+
 minWidth :: Integer -> Int
 minWidth n = max 1 (length (takeWhile (<= n) (1 : map (* 2) powers)))
  where powers = iterate (* 2) (1 :: Integer)
@@ -107,6 +115,9 @@ minWidth n = max 1 (length (takeWhile (<= n) (1 : map (* 2) powers)))
 elabExpr :: Maybe Int -> Expr -> E (IExpr, Int)
 elabExpr expected = \case
   EConst n -> do
+    case expected of
+      Just w -> checkConstFits n w
+      Nothing -> return ()
     let w = maybe (minWidth n) id expected
     return (IConstV (constBits n w), w)
 
@@ -387,7 +398,7 @@ elabRhs es w = do
   return (IList vals w)
 
 constOf :: Int -> Expr -> E [Bit]
-constOf w (EConst n) = return (constBits n w)
+constOf w (EConst n) = checkConstFits n w >> return (constBits n w)
 constOf _ e = err ("value lists may only contain numeric constants (near " ++ show e ++ ")")
 
 --------------------------------------------------------------------------------
