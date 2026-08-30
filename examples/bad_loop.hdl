@@ -1,0 +1,4 @@
+# ERROR: combinational loop (no dff breaks the cycle)
+sim 8
+wire w1 = ~w2
+wire w2 = ~w1

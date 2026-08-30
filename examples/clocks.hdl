@@ -1,0 +1,10 @@
+# Divided clocks: c2 runs at half, c4 at a quarter of the implicit clock.
+clk c1 1
+clk c2 2
+clk c4 4
+
+wire d = 0100100010001000
+
+wire q2 = dff(d, c2)          # sampled on rising edges of c2
+wire x1 = c1 & c2
+wire y  = c1 ? ~c2 : 1

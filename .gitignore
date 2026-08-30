@@ -1,0 +1,18 @@
+# Haskell / cabal build artifacts
+dist-newstyle/
+dist/
+build/
+.ghc.environment.*
+*.o
+*.hi
+
+# built binaries
+minisim
+minisim.exe
+
+# python
+__pycache__/
+*.pyc
+
+# generated diagrams (make svg)
+out/

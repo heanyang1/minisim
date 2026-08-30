@@ -1,0 +1,21 @@
+# 3-stage shift register built from dffs, plus a component with a 2-bit port.
+# T = 8 comes from the longest bit-sequence literal (din).
+
+clk c1 1
+wire din = 11001010
+
+def stage(D) -> Q:
+	return dff(D, c1)   # clocks are visible inside components
+
+def or(A[2]) -> Y:
+	return A[0]|A[1]
+
+wire q0 = stage(din)
+wire q1 = stage(q0)
+wire q2 = stage(q1)
+
+# a component with a 2-bit input port
+wire pair[2]
+assign pair[0] = q0
+assign pair[1] = q1
+wire ored = or(pair)

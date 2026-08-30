@@ -1,0 +1,7 @@
+# Transparent latch vs. dff on the same data.
+clk c1 1
+wire d  = 01111000
+wire en = 11100100
+
+wire q_latch = latch(d, E=en)
+wire q_dff   = dff(d, c1)

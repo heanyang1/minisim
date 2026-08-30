@@ -1,0 +1,52 @@
+# Comment starts with #
+
+# There is an implicit clock with the highest frequency.
+# It's 1 at timestamp k*2+1 and 0 at timestamp k*2.
+# Users can define a clock that is divided from that clock.
+clk c1 1 # divided by 1 -> has the same frequency
+clk c2 2 # divided by 2 -> has 1/2 frequency
+# clk c3 3 # Error: not supported if the number is not the power of 2
+# Names like c1, c2 have the same syntax rule as variables in C
+
+# Define wires. There is no wire/reg difference like Verilog.
+wire w1 # 1-bit wire
+wire w2[10] # 10-bits wire. It should behave like an array in C
+wire w3, w4, w5[5] # Define multiple wires
+# Other kinds of arrays are not supported.
+
+# Assign values to wires.
+assign w1 = 1010000 # 1 at timestamp 1, 0 at time 2, 1 at time 3, and so on.
+assign w2 = 0x11, 13, 0x5 # 0x11 at timestamp 1, 13 at time 2 and so on. Supports decimal and hexagonal. Pad 0 at the end if there is no enough value.
+assign w3 = c1 ? w1 & w2[0] : !00010 # Allow C-like expressions with (at least) &, |, !, ~, ^, ?:, clock, wire and constant and component.
+assign w5[1] = w3 # Allow bit select
+wire w6 = w1 # Shorthand for defining and assigning wires
+# assign w1 = 010100 # Error: you can only assign to a bit once.
+assign w5[2] = 2 # You can assign to different bit of an array in different statements.
+
+# All statement above can only be in one line. You can use `;` to merge two statement in one line:
+wire a=10;wire b=a
+
+# Define components
+# One-liner
+def and(A,B) -> Y: Y=A&B # Output port is pointed by the arrow
+
+# Use indentation for multiple lines
+def or(A[2]) -> Y:
+	return A[0]|A[1] # the same as Y=A[0]|[1]
+
+# Use components
+wire and_A=100
+wire and_B=011
+wire and_out = and(and_A,B=and_B) # supports `port=wire` or just `wire`
+
+# Built-in component that should not be defined by the user
+# def dff(D,CP) -> Q:  (built-in; dff/latch cannot be redefined by the user)
+	# D flip-flop
+	# If CP is 0 at time `t` and 1 at time `t+1`, then Q's value at time `t+1` is the same as D's value at time `t`,
+	# otherwise Q keep its value at `t`
+	# The initial value is a special state `x`. `x` can't be assigned by the user.
+
+# def latch(D,E) -> Q:  (built-in)
+	# latch
+	# If E is 1, then Q=D, otherwise keep the previous value
+	# The initial value is `x`

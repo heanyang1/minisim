@@ -1,0 +1,4 @@
+# ERROR: a bit can only be assigned once
+wire w
+assign w = 1010
+assign w = 0101

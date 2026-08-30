@@ -1,0 +1,159 @@
+name: CI
+
+# Build & test on every push/PR; build release binaries for Linux and Windows.
+# Pushing a tag "v*" additionally attaches the binaries to a GitHub release.
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to create releases and upload assets
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build & test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up GHC & cabal
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: "9.10.3"
+          cabal-version: "3.16.1.0"
+
+      - name: Cache cabal store and build directory
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cabal
+            ~/.local/state/cabal
+            dist-newstyle
+          key: cabal-${{ runner.os }}-${{ hashFiles('**/*.cabal', 'cabal.project') }}
+          restore-keys: |
+            cabal-${{ runner.os }}-
+
+      - name: Package sanity check
+        run: cabal check
+
+      - name: Update package index
+        run: cabal update
+
+      - name: Build
+        run: cabal build all
+
+      - name: Unit tests (HUnit, via cabal test)
+        run: cabal test
+
+      - name: Renderer unit tests (python)
+        run: python3 -m unittest discover -s tests -p "test_*.py" -v
+
+      - name: End-to-end regression tests
+        run: |
+          cp "$(cabal list-bin minisim)" minisim
+          python3 tests/check.py
+
+  binaries:
+    name: Build ${{ matrix.platform }} binary
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ubuntu-22.04 -> glibc 2.35, so the binary also runs on 22.04/24.04
+          # and Debian 12+ (ubuntu-latest would require a newer glibc)
+          - os: ubuntu-22.04
+            platform: linux-x86_64
+          - os: windows-latest
+            platform: windows-x86_64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash     # also used on Windows (Git Bash)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up GHC & cabal
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: "9.10.3"
+          cabal-version: "3.16.1.0"
+
+      - name: Cache cabal store and build directory
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cabal
+            ~/.local/state/cabal
+            dist-newstyle
+          key: cabal-${{ runner.os }}-${{ hashFiles('**/*.cabal', 'cabal.project') }}
+          restore-keys: |
+            cabal-${{ runner.os }}-
+
+      - name: Update package index
+        run: cabal update
+
+      - name: Build stripped release binary
+        run: cabal build exe:minisim --enable-executable-stripping
+
+      - name: Smoke test the binary
+        run: |
+          BIN="$(cabal list-bin minisim)"
+          "$BIN" --text examples/latch.hdl > /dev/null
+          "$BIN" sample.txt > /dev/null
+
+      - name: Package standalone archive
+        run: |
+          set -euo pipefail
+          BIN="$(cabal list-bin minisim)"
+          EXE=""
+          [[ "${RUNNER_OS}" == "Windows" ]] && EXE=".exe"
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            VER="${GITHUB_REF_NAME#v}"
+          else
+            VER="0.0.0-dev.${GITHUB_SHA::7}"
+          fi
+          NAME="minisim-$VER-${{ matrix.platform }}"
+          mkdir -p "dist/$NAME"
+          cp "$BIN" "dist/$NAME/minisim$EXE"
+          cp README.md wavedrom2svg.py "dist/$NAME/"
+          cp -r examples "dist/$NAME/examples"
+          cd dist
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            tar -a -c -f "$NAME.zip" "$NAME"        # bsdtar: zip by extension
+            echo "ASSET=dist/$NAME.zip" >> "$GITHUB_ENV"
+          else
+            tar -c -z -f "$NAME.tar.gz" "$NAME"
+            echo "ASSET=dist/$NAME.tar.gz" >> "$GITHUB_ENV"
+          fi
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: minisim-${{ matrix.platform }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+
+      - name: Attach to GitHub release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          # tolerate the race where the other matrix job just created it
+          gh release view "$TAG" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1 \
+            || gh release create "$TAG" -R "$GITHUB_REPOSITORY" \
+                 --title "minisim $TAG" --generate-notes \
+            || gh release view "$TAG" -R "$GITHUB_REPOSITORY" > /dev/null
+          gh release upload "$TAG" "$ASSET" -R "$GITHUB_REPOSITORY" --clobber

@@ -1,0 +1,4 @@
+# ERROR: the CP port of dff may only be a clock expression
+wire d = 1010
+wire sel = 1100
+wire bad = dff(d, sel)
