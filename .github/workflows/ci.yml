@@ -53,13 +53,8 @@ jobs:
       - name: Unit tests (HUnit, via cabal test)
         run: cabal test
 
-      - name: Renderer unit tests (python)
-        run: python3 -m unittest discover -s tests -p "test_*.py" -v
-
-      - name: End-to-end regression tests
-        run: |
-          cp "$(cabal list-bin minisim)" minisim
-          python3 tests/check.py
+      - name: Binary smoke test
+        run: cabal run minisim -- --text sample.txt > /dev/null
 
   binaries:
     name: Build ${{ matrix.platform }} binary

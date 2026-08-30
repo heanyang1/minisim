@@ -19,7 +19,7 @@ make ghc         # offline fallback: plain ghc (parsec/mtl ship with GHC)
 cabal run minisim -- sample.txt   # same, without copying the binary
 ./minisim --text sample.txt       # ASCII table (handy for debugging)
 python3 wavedrom2svg.py out/sample.json -o out/sample.svg
-make test       # all tests: HUnit unit tests, renderer unit tests, end-to-end regressions
+make test       # unit tests (cabal test) + binary smoke test
 make svg        # render all examples to out/*.svg and out/*.png
 ```
 
@@ -147,9 +147,8 @@ the simulator's timestamps.
 
 `.github/workflows/ci.yml` runs on every push and pull request:
 
-- **test** — `cabal check`, `cabal build`, the HUnit unit tests (`cabal test`),
-  the Python renderer unit tests and the end-to-end regression checks
-  (`tests/check.py`).
+- **test** — `cabal check`, `cabal build`, the HUnit unit tests (`cabal test`)
+  and a smoke run of the built binary on `sample.txt`.
 - **binaries** — after **test** passes, builds stripped standalone binaries
   on a matrix: `linux-x86_64` (built on `ubuntu-22.04`, so it runs on any
   glibc >= 2.35 distro; GHC bundles everything else) and `windows-x86_64`.
@@ -174,8 +173,6 @@ src/Minisim/Elab.hs     name/width checks, component inlining, sim length
 src/Minisim/Sim.hs      the simulation loop (x propagation, loop detection)
 src/Minisim/WaveDrom.hs WaveDrom JSON emission
 wavedrom2svg.py         JSON -> SVG renderer (stdlib only)
-tests/check.py          end-to-end regression tests with hand-computed expectations
-tests/test_svg.py       unit tests for the renderer (unittest)
 test/                   Haskell unit tests (HUnit, via `cabal test`)
 examples/*.hdl          samples incl. intentional error cases (bad_*.hdl)
 cabal.project           cabal project (make ghc needs no index)

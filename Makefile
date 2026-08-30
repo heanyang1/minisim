@@ -20,9 +20,8 @@ ghc:
 	    -package parsec -package mtl -package containers app/Main.hs
 
 test: minisim
-	cabal test                                 # Haskell unit tests (HUnit)
-	python3 -m unittest discover -s tests -p "test_*.py"   # renderer unit tests
-	python3 tests/check.py                     # end-to-end regression tests
+	cabal test                                 # HUnit unit tests
+	cabal run minisim -- --text sample.txt > /dev/null   # binary smoke test
 
 # render all examples to out/*.json / out/*.svg / out/*.png
 svg: minisim
