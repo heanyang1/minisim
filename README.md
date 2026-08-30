@@ -1,5 +1,7 @@
 # minisim
 
+> This is (once again) a vibe-coded project. This remark will be deleted once I have enough time to maintain it.
+
 A tiny HDL simulator: it parses a small Verilog-flavoured HDL (with parsec),
 simulates it for a number of timestamps and emits a
 [WaveDrom](https://wavedrom.com/) JSON timing diagram. A Python script renders
