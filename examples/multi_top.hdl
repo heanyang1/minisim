@@ -1,0 +1,16 @@
+# Top-level design; expects multi_lib.hdl to be passed after it on the
+# command line so that c1, stage and or are defined:
+#   ./minisim examples/multi_top.hdl examples/multi_lib.hdl
+# T = 8 comes from the longest bit-sequence literal (din).
+
+wire din = 11001010
+
+wire q0 = stage(din)
+wire q1 = stage(q0)
+wire q2 = stage(q1)
+
+# a component with a 2-bit input port
+wire pair[2]
+assign pair[0] = q0
+assign pair[1] = q1
+wire ored = or(pair)

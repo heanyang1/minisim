@@ -54,7 +54,9 @@ jobs:
         run: cabal test
 
       - name: Binary smoke test
-        run: cabal run minisim -- --text sample.txt > /dev/null
+        run: |
+          cabal run minisim -- --text sample.txt > /dev/null
+          cabal run minisim -- --text examples/multi_top.hdl examples/multi_lib.hdl > /dev/null
 
   binaries:
     name: Build ${{ matrix.platform }} binary
@@ -105,6 +107,7 @@ jobs:
           BIN="$(cabal list-bin minisim)"
           "$BIN" --text examples/latch.hdl > /dev/null
           "$BIN" sample.txt > /dev/null
+          "$BIN" --text examples/multi_top.hdl examples/multi_lib.hdl > /dev/null
 
       - name: Package standalone archive
         run: |

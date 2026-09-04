@@ -20,10 +20,20 @@ make ghc         # offline fallback: plain ghc (parsec/mtl ship with GHC)
 ./minisim sample.txt              # WaveDrom JSON to stdout
 cabal run minisim -- sample.txt   # same, without copying the binary
 ./minisim --text sample.txt       # ASCII table (handy for debugging)
+./minisim a.hdl b.hdl            # several files: concatenated in order, simulated as one
 python3 wavedrom2svg.py out/sample.json -o out/sample.svg
 make test       # unit tests (cabal test) + binary smoke test
 make svg        # render all examples to out/*.svg and out/*.png
 ```
+
+## Multiple input files
+
+`./minisim a.hdl b.hdl ...` concatenates the given files (in command-line
+order, each terminated by a newline) and simulates the result as one
+program — handy for keeping components in a library file, e.g.
+`./minisim examples/multi_top.hdl examples/multi_lib.hdl`.
+Parse errors are reported against the file (and line within it) the
+offending text came from; other errors carry the file list as a prefix.
 
 ## Language
 

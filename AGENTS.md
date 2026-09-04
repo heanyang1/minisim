@@ -10,7 +10,7 @@ renders that JSON to SVG. All deps are GHC boot libraries (parsec, containers, m
 - `make ghc` — offline fallback build with plain ghc
 - `make test` — HUnit tests (`cabal test`) + binary smoke test; or run `cabal test` directly
 - `make svg` — render all examples to `out/*.svg`/`*.png` (needs python3, rsvg-convert)
-- `cabal run minisim -- [--text] [-o out.json] input.hdl` — run without copying; `--text` gives an ASCII debug table
+- `cabal run minisim -- [--text] [-o out.json] input.hdl [more.hdl ...]` — run without copying; `--text` gives an ASCII debug table; several inputs are concatenated (in order) and simulated as one program
 - `make clean` — remove build artifacts (`dist-newstyle/`, `build/`, `out/`, `./minisim`)
 
 ## Architecture
@@ -21,7 +21,7 @@ event simulation; dff outputs first, then combinational wires via memoized DFS;
 combinational loops are errors) → `Minisim.WaveDrom` (JSON). CLI in `app/Main.hs`.
 
 - `src/Minisim/` — library modules; `test/` — HUnit suite (TestMain + one file per module)
-- `examples/*.hdl` — sample programs; `bad_*.hdl` are intentionally invalid (error-message checks)
+- `examples/*.hdl` — sample programs; `bad_*.hdl` are intentionally invalid (error-message checks); `multi_top.hdl` + `multi_lib.hdl` are a multi-input pair
 - `README.md` — authoritative language spec (literals, x-propagation, clocks, components)
 - `.github/workflows/ci.yml` — CI does `cabal check`, build, test, smoke test, release binaries
 

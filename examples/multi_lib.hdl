@@ -1,0 +1,12 @@
+# Library file used together with multi_top.hdl:
+#   ./minisim examples/multi_top.hdl examples/multi_lib.hdl
+# All input files are concatenated (in the order given) and simulated as
+# one program, so the clock and components below are visible in multi_top.hdl.
+
+clk c1 1
+
+def stage(D) -> Q:
+	return dff(D, c1)   # clocks are visible inside components
+
+def or(A[2]) -> Y:
+	return A[0]|A[1]

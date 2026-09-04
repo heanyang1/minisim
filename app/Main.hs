@@ -1,11 +1,15 @@
 -- | minisim: a tiny HDL simulator producing WaveDrom JSON.
 module Main (main) where
 
+import Control.Exception (IOException, try)
 import Control.Monad (forM_)
 import qualified Data.Map.Strict as M
+import Data.List (intercalate)
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
 import System.IO
+import Text.Parsec.Error (ParseError, errorPos, setErrorPos)
+import Text.Parsec.Pos (newPos, sourceColumn, sourceLine)
 
 import Minisim.Ast (Bit(..))
 import Minisim.Elab (Design(..), elaborate)
@@ -14,13 +18,13 @@ import Minisim.Sim (SimResult(..), runSim)
 import Minisim.WaveDrom (renderWaveDrom)
 
 data Opts = Opts
-  { optInput  :: Maybe FilePath
+  { optInputs :: [FilePath]
   , optOutput :: Maybe FilePath
   , optText   :: Bool
   }
 
 defaultOpts :: Opts
-defaultOpts = Opts Nothing Nothing False
+defaultOpts = Opts [] Nothing False
 
 parseOpts :: [String] -> Either String Opts
 parseOpts ("-o" : f : rest) = (\o -> o { optOutput = Just f }) <$> parseOpts rest
@@ -29,11 +33,11 @@ parseOpts ("-h" : _) = usageErr
 parseOpts ("--help" : _) = usageErr
 parseOpts (f : rest)
   | take 1 f == "-" = Left ("unknown option " ++ f)
-  | otherwise = (\o -> o { optInput = Just f }) <$> parseOpts rest
+  | otherwise = (\o -> o { optInputs = optInputs o ++ [f] }) <$> parseOpts rest
 parseOpts [] = Right defaultOpts
 
 usage :: String
-usage = "usage: minisim [--text] [-o out.json] input.hdl"
+usage = "usage: minisim [--text] [-o out.json] input.hdl [more.hdl ...]"
 
 usageErr :: Either String a
 usageErr = Left usage
@@ -45,14 +49,12 @@ main = do
   args <- getArgs
   case parseOpts args of
     Left msg -> hPutStrLn stderr msg >> exitFailure
-    Right opts -> case optInput opts of
-      Nothing -> hPutStrLn stderr usage >> exitFailure
-      Just file -> do
-        src <- readFile file
-        case compile src of
-          Left e -> do
-            hPutStrLn stderr ("minisim: " ++ file ++ ": " ++ e)
-            exitFailure
+    Right opts -> case optInputs opts of
+      [] -> hPutStrLn stderr usage >> exitFailure
+      fs -> do
+        inputs <- readInputs fs
+        case inputs >>= compile of
+          Left e -> hPutStrLn stderr ("minisim: " ++ e) >> exitFailure
           Right (warnings, sr) -> do
             forM_ warnings $ \w -> hPutStrLn stderr ("minisim: warning: " ++ w)
             let out = if optText opts then renderText sr else renderWaveDrom sr
@@ -60,12 +62,57 @@ main = do
               Just f -> writeFile f out
               Nothing -> putStr out
 
-compile :: String -> Either String ([String], SimResult)
-compile src = do
-  prog <- either (Left . show) Right (parseProgram "input" src)
-  design <- elaborate prog
-  sr <- runSim design
+-- | Read every input file; one that cannot be read fails the whole run with
+-- its IO error (which mentions the file name).
+readInputs :: [FilePath] -> IO (Either String [(FilePath, String)])
+readInputs = go []
+ where
+  go acc [] = return (Right (reverse acc))
+  go acc (f : rest) = do
+    r <- try (readFile f) :: IO (Either IOException String)
+    case r of
+      Left ioe -> return (Left (show ioe))
+      Right s -> go ((f, s) : acc) rest
+
+-- | Simulate several input files as one program: their texts are
+-- concatenated (in command-line order, each terminated by a newline) and
+-- compiled exactly like a single file.
+compile :: [(FilePath, String)] -> Either String ([String], SimResult)
+compile files = do
+  let srcs = map (ensureNl . snd) files
+      starts = init (scanl (+) 1 (map countLines srcs))
+      names = map fst files
+      label = case names of
+        [f] -> f
+        fs -> intercalate "+" fs
+  prog <- either (Left . remapParseError names starts) Right
+                (parseProgram "input" (concat srcs))
+  design <- tagged label (elaborate prog)
+  sr <- tagged label (runSim design)
   return (dWarn design, sr)
+ where
+  tagged l = either (Left . ((l ++ ": ") ++)) Right
+
+-- A file's text is terminated with a newline so that the last line of one
+-- file cannot merge with the first line of the next.
+ensureNl :: String -> String
+ensureNl s
+  | null s || last s == '\n' = s
+  | otherwise = s ++ "\n"
+
+countLines :: String -> Int
+countLines = length . filter (== '\n')
+
+-- | A parse error in the concatenated source is reported against the file
+-- (and the line within that file) the offending line came from.
+remapParseError :: [FilePath] -> [Int] -> ParseError -> String
+remapParseError names starts pe = case filter ((<= l) . snd) (zip names starts) of
+  [] -> show pe
+  xs -> let (n, s) = last xs
+        in show (setErrorPos (newPos n (l - s + 1) col) pe)
+ where
+  l = sourceLine (errorPos pe)
+  col = sourceColumn (errorPos pe)
 
 --------------------------------------------------------------------------------
 -- Human readable dump (one line per signal, one column per timestamp)
