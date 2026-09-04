@@ -93,8 +93,10 @@ bit-sequences.
 ### Clocks and time
 
 Timestamps run `t = 1..T`. The implicit clock is `1` at `t = k*2+1` and `0` at
-`t = k*2`. A `clk cN m` clock (m a power of two) is `1` when `(t / m)` is odd
-(period `2m`). Clocks may be used like any 1-bit signal in expressions, and
+`t = k*2`. A `clk cN m` clock (m a power of two) is `1` while `((t-1) / m)` is
+even (period `2m`): high for timestamps `1..m`, low for `m+1..2m`, and so on —
+its rising edges align with the implicit clock's, so every clock starts at
+`1`. Clocks may be used like any 1-bit signal in expressions, and
 are visible inside component bodies.
 
 ### Length (T)

@@ -77,7 +77,7 @@ renderText sr = unlines (header : rows)
   t = srT sr
   header = padR 9 "t" ++ unwords [padL 4 (show k) | k <- [1 .. t]]
   clockRow (n, m) = padR 9 n
-    ++ unwords [ padL 4 [bitCh (if odd (k `div` fromInteger m) then B1 else B0)]
+    ++ unwords [ padL 4 [bitCh (if even ((k - 1) `div` fromInteger m) then B1 else B0)]
                | k <- [1 .. t] ]
   wireRow (n, w) = padR 9 n
     ++ unwords [ padL (max 4 w) (if w == 1 then [bitCh (headOr v)] else map bitCh (reverse v))

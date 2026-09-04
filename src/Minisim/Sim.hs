@@ -159,7 +159,9 @@ evalIExpr e = case e of
     return [if t <= length bs then bs !! (t - 1) else B0]
   IClock m -> do
     t <- gets stNow
-    return [if odd (t `div` fromInteger m) then B1 else B0]
+    -- high for t = 1..m, 2m+1..3m, ...: starts at 1 and rises in step
+    -- with the implicit clock (which is the m = 1 case)
+    return [if even ((t - 1) `div` fromInteger m) then B1 else B0]
   IWire n -> evalWire n
   ISel se i -> do
     v <- evalIExpr se

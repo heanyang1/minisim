@@ -13,9 +13,9 @@ simTests = TestList
     "implicit clock (div 1)" ~: sim1 (unlines
       [ "sim 6", "clk c1 1", "wire m = c1" ]) "m" "101010"
   , "clock divided by 2" ~: sim1 (unlines
-      [ "sim 6", "clk c2 2", "wire m = c2" ]) "m" "011001"
+      [ "sim 6", "clk c2 2", "wire m = c2" ]) "m" "110011"
   , "clock divided by 4" ~: sim1 (unlines
-      [ "sim 12", "clk c4 4", "wire m = c4" ]) "m" "000111100001"
+      [ "sim 12", "clk c4 4", "wire m = c4" ]) "m" "111100001111"
 
     -- literals
   , "sequence pads with 0" ~:
@@ -85,7 +85,7 @@ simTests = TestList
       "q" "xx110000"
   , "dff on a divided clock" ~: sim1 (unlines
       [ "sim 8", "clk c2 2", "wire d = 01001000", "wire q = dff(d, c2)" ])
-      "q" "x0000111"
+      "q" "xxxx0000"
   , "dff with named arguments" ~: sim1 (unlines
       [ "sim 6", "clk c1 1", "wire d = 110011", "wire q = dff(D=d, CP=c1)" ])
       "q" "xx1100"

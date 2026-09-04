@@ -31,12 +31,13 @@ renderWaveDrom sr = unlines
 
 -- | Entry for a clock signal; a clock's value is a pure function of time:
 -- the implicit clock is 1 at timestamp k*2+1 and 0 at k*2, a derived clock
--- with divisor m follows it with period m*2.
+-- with divisor m (period 2m) is 1 for timestamps 1..m, 2m+1..3m, ... so its
+-- rising edges align with the implicit clock's
 clockEntry :: Int -> Name -> Integer -> String
 clockEntry t n m =
   "{\"name\": " ++ jsonStr n ++ ", \"wave\": " ++ jsonStr (bitWave bits) ++ "}"
  where
-  bits = [if odd (k `div` fromInteger m) then B1 else B0 | k <- [1 .. t]]
+  bits = [if even ((k - 1) `div` fromInteger m) then B1 else B0 | k <- [1 .. t]]
 
 wireEntry :: Name -> Int -> [[Bit]] -> String
 wireEntry n w hist

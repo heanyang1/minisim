@@ -15,7 +15,7 @@ waveTests = TestList
   [ "clock rendering" ~:
       has ("\"name\": \"c1\", \"wave\": \"101\"") (render (SimResult 3 [("c1", 1)] [] M.empty))
   , "divided clock rendering" ~:
-      has "\"wave\": \"01.0\"" (render (SimResult 4 [("c2", 2)] [] M.empty))
+      has "\"wave\": \"1.0.\"" (render (SimResult 4 [("c2", 2)] [] M.empty))
   , "bit wave uses . for repeats" ~:
       has "\"wave\": \"1.0\"" (render (bit [[B1], [B1], [B0]]))
   , "x bits" ~:
