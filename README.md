@@ -68,6 +68,12 @@ def or(A[2]) -> Y:                     # multi-line body (indented)
 	return A[0] | A[1]
 wire o = or(and_A, B=and_B)            # positional or port=expr arguments
 
+def c1(a, b) -> c, d, e:               # several outputs: each is assigned once
+	c = a & b                           # a call yields {c, d, e} (c is the MSB)
+	d = a | b
+	e = a ^ b
+wire out[3] = c1(w1, w2)
+
 # built-in, cannot be redefined:
 wire q = dff(D, CP)   # flip-flop: Q(t+1)=D(t) on a rising CP edge, else hold; initial x
 wire r = latch(D, E)  # transparent latch: E=1 -> Q=D, else hold; initial x
@@ -139,9 +145,9 @@ dff exactly. If you prefer the delayed variant, it is a one-line change in
 
 ### Components
 
-`def name<P1, P2>(port[width], ...) -> out:` followed by an inline
-`out = expr` (or `return expr`) or an indented body with a single result
-statement. The optional `<>` list names Verilog-like **parameters**
+`def name<P1, P2>(port[width], ...) -> out1, out2[width]:` followed by an
+inline `out = expr` or `return expr` body (single-output components only) or
+an indented body. The optional `<>` list names Verilog-like **parameters**
 (elaboration-time integers, given at the instantiation site); they are usable
 as constants and as widths inside the body. A body may also declare
 
@@ -149,12 +155,19 @@ as constants and as widths inside the body. A body may also declare
 * local **constants** (`const notrace table[16] = Num`),
 * **named instances** of other components (`Lut<12345> l1, l2`).
 
-Components are single-output; each instantiation binds arguments to ports
-(widths must match; clocks and constants are visible inside bodies, wires are
-not -- pass them as ports). Recursive components are rejected. `dff`/`latch`
-are reserved built-ins available everywhere, one state element per
-instantiation site (also inside components, e.g.
-`def stage(D) -> Q: return dff(D, c1)`).
+A component has one or more **output ports** (`-> c, d, e:`). Every output is
+assigned exactly once (`c = expr`); an omitted width is inferred from the
+assigned expression, an explicit `out[n]` (constants adapt to it) must match.
+`return expr` is the short form for single-output components. A call
+evaluates to the concatenation of all outputs in declaration order (first
+output = MSB, like `{c, d, e}`), so `wire q[3] = c1(a, b)` gives
+c = `q[2]`, d = `q[1]`, e = `q[0]`; grab individual outputs with bit selects,
+or route them through local wires (outputs cannot be read inside the body).
+Each instantiation binds arguments to ports (widths must match; clocks and
+constants are visible inside bodies, wires are not -- pass them as ports).
+Recursive components are rejected. `dff`/`latch` are reserved built-ins
+available everywhere, one state element per instantiation site (also inside
+components, e.g. `def stage(D) -> Q: return dff(D, c1)`).
 
 ### Instantiation and hierarchy
 
@@ -174,7 +187,8 @@ under hierarchical names and appear that way in the waveform: the wire `key`
 inside instance `l1` is `l1.key`; an instance `s2` used inside a component
 instantiated as `s1` gives `s1.s2.wire1`. Declaring a wire `notrace` (or a
 `const notrace`) hides it from the waveform while keeping it in the design.
-See `examples/lut.hdl` for all of this in one place.
+See `examples/lut.hdl` for all of this in one place and
+`examples/multiout.hdl` for multi-output components (half/full adders).
 
 ## Adjustments to the original sample syntax
 

@@ -115,28 +115,28 @@ parserTests = TestList
   -- components
   , "one-line def" ~:
       parsesTo "def and(A,B) -> Y: Y=A&B"
-        (Program [SDef (Def [] "and" [("A", WConst 1), ("B", WConst 1)] "Y"
+        (Program [SDef (Def [] "and" [("A", WConst 1), ("B", WConst 1)] [("Y", Nothing)]
                   [BAssign "Y" (EBin OpAnd (EVar "A") (EVar "B"))])])
   , "one-line def with return" ~:
       parsesTo "def n(A) -> Y: return ~A"
-        (Program [SDef (Def [] "n" [("A", WConst 1)] "Y" [BReturn (EUn OpBNot (EVar "A"))])])
+        (Program [SDef (Def [] "n" [("A", WConst 1)] [("Y", Nothing)] [BReturn (EUn OpBNot (EVar "A"))])])
   , "def with parameters" ~:
       parsesTo "def Lut<Num>(A,B,C,D) -> Y: return A"
         (Program [SDef (Def ["Num"] "Lut"
                     [("A", WConst 1), ("B", WConst 1), ("C", WConst 1), ("D", WConst 1)]
-                    "Y" [BReturn (EVar "A")])])
+                    [("Y", Nothing)] [BReturn (EVar "A")])])
   , "def with parameter width" ~:
       parsesTo "def f<W>(A[W]) -> Y: return A[0]"
-        (Program [SDef (Def ["W"] "f" [("A", WName "W")] "Y"
+        (Program [SDef (Def ["W"] "f" [("A", WName "W")] [("Y", Nothing)]
                     [BReturn (EIdx "A" (EConst 0))])])
   , "indented def body ends at unindented line" ~:
       parsesTo "def or(A[2]) -> Y:\n\treturn A[0]|A[1]\nwire z = 1"
-        (Program [ SDef (Def [] "or" [("A", WConst 2)] "Y"
+        (Program [ SDef (Def [] "or" [("A", WConst 2)] [("Y", Nothing)]
                     [BReturn (EBin OpOr (EIdx "A" (EConst 0)) (EIdx "A" (EConst 1)))])
                  , SWireInit False "z" (WConst 1) [EConst 1] ])
   , "def body with blank and comment lines" ~:
       parsesTo "def f(A) -> Y:\n\n\t# comment\n\tY = A\n"
-        (Program [SDef (Def [] "f" [("A", WConst 1)] "Y" [BAssign "Y" (EVar "A")])])
+        (Program [SDef (Def [] "f" [("A", WConst 1)] [("Y", Nothing)] [BAssign "Y" (EVar "A")])])
   , "def body with local wires, consts and instances" ~:
       parsesTo (unlines
         [ "def Lut<Num>(A,B,C,D) -> Y:"
@@ -144,16 +144,36 @@ parserTests = TestList
         , "\twire key[4] = {D,C,B,A}"
         , "\treturn table[key]" ])
         (Program [SDef (Def ["Num"] "Lut"
-            [("A", WConst 1), ("B", WConst 1), ("C", WConst 1), ("D", WConst 1)] "Y"
+            [("A", WConst 1), ("B", WConst 1), ("C", WConst 1), ("D", WConst 1)] [("Y", Nothing)]
             [ BConst True (Just (WConst 16)) "table" (EVar "Num")
             , BWireInit False "key" (WConst 4)
                 [ECat [EVar "D", EVar "C", EVar "B", EVar "A"]]
             , BReturn (EIdx "table" (EVar "key")) ])])
   , "local instance statement in a body" ~:
       parsesTo "def f(A) -> Y:\n\tLut<5> l1\n\treturn l1(A,A,A,A)"
-        (Program [SDef (Def [] "f" [("A", WConst 1)] "Y"
+        (Program [SDef (Def [] "f" [("A", WConst 1)] [("Y", Nothing)]
             [ BInst "Lut" [5] ["l1"]
             , BReturn (ECall "l1" [] (replicate 4 (Nothing, EVar "A"))) ])])
+  , "def with multiple outputs" ~:
+      parsesTo (unlines
+        [ "def c1(a,b) -> c,d,e:"
+        , "\tc = a&b"
+        , "\td = a|b"
+        , "\te = a^b" ])
+        (Program [SDef (Def [] "c1" [("a", WConst 1), ("b", WConst 1)]
+            [("c", Nothing), ("d", Nothing), ("e", Nothing)]
+            [ BAssign "c" (EBin OpAnd (EVar "a") (EVar "b"))
+            , BAssign "d" (EBin OpOr (EVar "a") (EVar "b"))
+            , BAssign "e" (EBin OpXor (EVar "a") (EVar "b")) ])])
+  , "def with output widths" ~:
+      parsesTo "def f(a) -> y[4], z: y = a"
+        (Program [SDef (Def [] "f" [("a", WConst 1)]
+            [("y", Just (WConst 4)), ("z", Nothing)]
+            [BAssign "y" (EVar "a")])])
+  , "def with parameter output width" ~:
+      parsesTo "def f<W>(a) -> y[W]: y = a"
+        (Program [SDef (Def ["W"] "f" [("a", WConst 1)] [("y", Just (WName "W"))]
+            [BAssign "y" (EVar "a")])])
   , "call with positional and named args" ~:
       parsesTo "wire o = f(a, B=b)"
         (Program [SWireInit False "o" (WConst 1)
@@ -197,6 +217,9 @@ parserTests = TestList
   , "reject: missing clock divisor" ~: pf "clk c1"
   , "reject: sequence in value list" ~: pf "wire w = 1010, 5"
   , "reject: def without body" ~: pf "def f(A) -> Y:"
+  , "reject: def without output" ~: pf "def f(A) ->: return 1"
+  , "reject: assignment to a non-output in a body" ~:
+      pf "def f(A) -> Y:\n\tz = 1\n\tY = A"
   , "reject: unknown statement" ~: pf "foo 1"
   , "reject: missing expression" ~: pf "wire w = "
   , "reject: incomplete ternary" ~: pf "assign w = a ? b"

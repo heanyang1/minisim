@@ -9,6 +9,7 @@ module Minisim.Parser
 
 import Control.Monad (unless, void, when)
 import Data.Char (digitToInt)
+import Data.List (intercalate)
 import Text.Parsec
 import Text.Parsec.String (Parser)
 
@@ -250,42 +251,50 @@ defFull = do
   ps <- sepBy portDecl (sp *> char ',' <* sp)
   sp; _ <- char ')'; sp
   _ <- string "->"; sp
-  out <- ident; sp
-  _ <- char ':'; sp
-  body <- (do bs <- bodyStmt out
+  outs <- sepBy1 outDecl (sp *> char ',' <* sp)
+  sp; _ <- char ':'; sp
+  let outNames = map fst outs
+  body <- (do bs <- bodyStmt outNames
               finishLine
               return [bs])
-          <|> (finishLine *> many1 (bodyLine kwcol out)
+          <|> (finishLine *> many1 (bodyLine kwcol outNames)
                <?> "an indented component body after ':'")
-  return [SDef (Def params n ps out body)]
+  return [SDef (Def params n ps outs body)]
 
 portDecl :: Parser (Name, Width)
 portDecl = do
   n <- ident; mw <- widthOpt
   return (n, maybe (WConst 1) id mw)
 
+-- | An output port @name[width]@; the width is inferred from the assigned
+-- expression when omitted.
+outDecl :: Parser (Name, Maybe Width)
+outDecl = do
+  n <- ident; mw <- widthOpt
+  return (n, mw)
+
 -- | One indented body line.  Blank\/comment-only lines do not belong to the
 -- body but are skipped.  A line whose indentation is <= the @def@ keyword's
 -- column terminates the body.
-bodyLine :: Int -> Name -> Parser BodyStmt
-bodyLine col out =
+bodyLine :: Int -> [Name] -> Parser BodyStmt
+bodyLine col outs =
   try (skipBlankLines *> do
     ind <- many (oneOf " \t")
     when (null ind || 1 + length ind <= col) $
       fail "this line is not part of the component body"
-    bs <- bodyStmt out
+    bs <- bodyStmt outs
     finishLine
     return bs)
 
-bodyStmt :: Name -> Parser BodyStmt
-bodyStmt out =
+bodyStmt :: [Name] -> Parser BodyStmt
+bodyStmt outs =
   (do keyword "return"; sp1
       e <- exprP
       return (BReturn e)
   ) <|> try (do n <- ident; sp; _ <- char '='; sp
-                when (n /= out) $
-                  fail ("only the output port " ++ show out
-                        ++ " may be assigned inside a component")
+                when (n `notElem` outs) $
+                  fail ("only an output port may be assigned inside a component"
+                        ++ " (outputs: " ++ intercalate ", " outs ++ ")")
                 e <- exprP
                 return (BAssign n e)
   ) <|> (do keyword "wire"; sp1

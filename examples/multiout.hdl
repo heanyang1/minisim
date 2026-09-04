@@ -1,0 +1,32 @@
+# Multiple output ports: `def c1(a,b) -> c,d,e:` declares three outputs.
+# Every output is assigned exactly once, and a call evaluates to the
+# concatenation of all outputs in declaration order -- the first (leftmost)
+# output becomes the most significant bit(s), exactly like `{c, d, e}`.
+
+wire a = 11001010
+wire b = 10101010
+
+def half(a, b) -> s, co:
+	s = a ^ b
+	co = a & b
+
+wire h[2] = half(a, b)   # h = {s, co}: h[1] is s, h[0] is co
+wire s = h[1]
+wire co = h[0]
+
+# outputs may carry explicit widths (parameters work too); constants adapt
+def split(x[2]) -> lo[2], hi[2]:
+	lo = x
+	hi = ~x
+
+wire d[4] = split({a, b})   # d = {hi, lo}
+
+# compose multi-output components through local wires: a 1-bit full adder
+def full(a, b, cin) -> s, co:
+	wire t[2] = half(a, b)      # {s1, c1}
+	wire u[2] = half(t[1], cin) # {s,  c2}
+	s = u[1]
+	co = t[0] | u[0]
+
+wire cin = 00001111
+wire fsum[2] = full(a, b, cin)   # {sum, carry-out}

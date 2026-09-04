@@ -5,7 +5,7 @@ import Data.List (isInfixOf)
 import qualified Data.Map.Strict as M
 import Test.HUnit
 
-import Minisim.Ast (Bit(..), BOp(..))
+import Minisim.Ast (Bit(..), BOp(..), UOp(..))
 import Minisim.Elab
 
 import Support (okD, expectLeft)
@@ -317,6 +317,96 @@ elabTests = TestList
   , "err: multiple result statements" ~:
       expectLeft "more than one result"
         "sim 4\ndef f(A) -> Y:\n\treturn A\n\tY = 1\nwire w = f(1)"
+
+    -- multiple outputs
+  , "multi-out: call yields the concatenation of outputs" ~: do
+      d <- okD (unlines
+        [ "sim 4"
+        , "def f(a,b) -> c,d,e:"
+        , "\tc = a&b"
+        , "\td = a|b"
+        , "\te = a^b"
+        , "wire x = 1"
+        , "wire y[3] = f(x, x)" ])
+      dDrivers d M.! "y" @?=
+        ICat [ IBin OpXor (IWire "x") (IWire "x")
+             , IBin OpOr (IWire "x") (IWire "x")
+             , IBin OpAnd (IWire "x") (IWire "x") ]   -- c is the MSB
+      map (\(n, _, _) -> n) (dWires d) @?= ["x", "y"]
+  , "multi-out: named instance" ~: do
+      d <- okD (unlines
+        [ "sim 4"
+        , "def f(a) -> x,y:"
+        , "\tx = a"
+        , "\ty = ~a"
+        , "wire a = 1010"
+        , "f h1"
+        , "wire q[2] = h1(a)" ])
+      dDrivers d M.! "q" @?= ICat [IUn OpBNot (IWire "a"), IWire "a"]
+  , "multi-out: declared output width (constants adapt)" ~: do
+      d <- okD (unlines
+        [ "sim 4"
+        , "def f(a) -> y[4]: y = 1"
+        , "wire q[4] = f(0)" ])
+      dDrivers d M.! "q" @?= IConstV [B1, B0, B0, B0]
+  , "multi-out: parameter as an output width" ~:
+      okD (unlines
+        [ "sim 4"
+        , "def f<W>(a[W]) -> lo[W], hi[W]:"
+        , "\tlo = a"
+        , "\thi = ~a"
+        , "wire a[2] = 1, 2"
+        , "wire q[4] = f<2>(a)" ]) >> return ()
+  , "multi-out: single-output defs are unchanged (no ICat wrapper)" ~: do
+      d <- okD (unlines
+        [ "sim 4", "def f(A) -> Y: return A & A", "wire w = 1", "wire y = f(w)" ])
+      dDrivers d M.! "y" @?= IBin OpAnd (IWire "w") (IWire "w")
+  , "err: return in a multi-output component" ~:
+      expectLeft "instead of 'return'" (unlines
+        [ "sim 4"
+        , "def f(a) -> x,y:"
+        , "\treturn a"
+        , "wire q[2] = f(1)" ])
+  , "err: output not assigned" ~:
+      expectLeft "is not assigned" (unlines
+        [ "sim 4"
+        , "def f(a) -> x,y:"
+        , "\tx = a"
+        , "wire q[2] = f(1)" ])
+  , "err: output assigned more than once" ~:
+      expectLeft "more than once" (unlines
+        [ "sim 4"
+        , "def f(a) -> x,y:"
+        , "\tx = a"
+        , "\ty = a"
+        , "\tx = y"
+        , "wire q[2] = f(1)" ])
+  , "err: duplicate output port" ~:
+      expectLeft "duplicate output" "sim 4\ndef f(a) -> y,y: return a"
+  , "err: output clashes with a parameter" ~:
+      expectLeft "clashes with a parameter" "sim 4\ndef f<P>(a) -> P: return a"
+  , "err: local clashes with an output" ~:
+      expectLeft "clashes with an output" (unlines
+        [ "sim 4"
+        , "def f(a) -> x,y:"
+        , "\twire x = a"
+        , "\tx = a"
+        , "\ty = a"
+        , "wire q[2] = f(1)" ])
+  , "err: output width mismatch" ~:
+      expectLeft "width mismatch for output" (unlines
+        [ "sim 4"
+        , "def f(a) -> y[2]:"
+        , "\ty = a"
+        , "wire w = 1"
+        , "wire q[2] = f(w)" ])
+  , "err: multi-output result width must match the target" ~:
+      expectLeft "width mismatch" (unlines
+        [ "sim 4"
+        , "def f(a) -> x,y:"
+        , "\tx = a"
+        , "\ty = a"
+        , "wire q = f(1)" ])
   ]
  where
   constBits16 n =

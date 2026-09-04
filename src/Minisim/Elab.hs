@@ -426,8 +426,20 @@ instantiateBody prefix compName ps args = do
   mapM_ bodyDecl (defBody def)
   -- pass 2: local drivers (may be in any order)
   mapM_ bodyDriver (defBody def)
-  body <- bodyResult def
-  r <- elabExpr Nothing body
+  -- the result: one expression per output port; a multi-output call
+  -- evaluates to their concatenation (first output = MSB)
+  results <- bodyResults def
+  res <- forM results $ \(on, mwd, e) -> do
+    mw <- traverse resolveW mwd
+    (ie, w) <- elabExpr mw e
+    forM_ mw $ \w' ->
+      unless (w == w') $
+        err ("width mismatch for output " ++ show on ++ " of " ++ show compName
+             ++ ": expected " ++ show w' ++ ", got " ++ show w)
+    return (ie, w)
+  let r = case res of
+        [(ie, w)] -> (ie, w)
+        _ -> (ICat (reverse (map fst res)), sum (map snd res))
   modify' $ \st -> st { esInDef = esInDef old
                       , esPorts = esPorts old
                       , esParams = esParams old
@@ -439,15 +451,30 @@ instantiateBody prefix compName ps args = do
                       , esVisiting = esVisiting old }
   return r
 
--- | The single result expression of a component body.
-bodyResult :: Def -> E Expr
-bodyResult def =
-  case [e | BReturn e <- defBody def] ++ [e | BAssign _ e <- defBody def] of
-    [e] -> return e
-    []  -> err ("component " ++ show (defName def)
-                ++ " needs a 'return expr' or '" ++ defOut def ++ " = expr' statement")
-    _   -> err ("component " ++ show (defName def)
-                ++ " has more than one result statement")
+-- | The result expressions of a component body, one per output port, in
+-- declaration order.  @return@ is only allowed for single-output components.
+bodyResults :: Def -> E [(Name, Maybe Width, Expr)]
+bodyResults def = do
+  let dn = defName def
+      outs = defOuts def
+      rets = [e | BReturn e <- defBody def]
+      assigns = [(n, e) | BAssign n e <- defBody def]
+  when (length outs > 1 && not (null rets)) $
+    err ("component " ++ show dn ++ " has " ++ show (length outs)
+         ++ " outputs; assign each one ('out = expr') instead of 'return'")
+  case (rets, assigns) of
+    ([], []) -> err ("component " ++ show dn
+                     ++ " needs a 'return expr' or 'out = expr' statement"
+                     ++ " for every output port")
+    ([e], []) | [(on, ow)] <- outs -> return [(on, ow, e)]
+    ([], _) -> forM outs $ \(on, ow) ->
+      case [e | (n, e) <- assigns, n == on] of
+        [e] -> return (on, ow, e)
+        []  -> err ("output port " ++ show on ++ " of " ++ show dn
+                    ++ " is not assigned")
+        _   -> err ("output port " ++ show on ++ " of " ++ show dn
+                    ++ " is assigned more than once")
+    _ -> err ("component " ++ show dn ++ " has more than one result statement")
 
 -- | Pass 1 over a component body: register local declarations.
 bodyDecl :: BodyStmt -> E ()
@@ -477,6 +504,11 @@ checkLocalFresh n = do
         || M.member n (esClocks s)) $
     err ("duplicate local name " ++ show n ++ " in component "
          ++ show (esInDef s))
+  case esInDef s of
+    Just d | Just def <- M.lookup d (esDefs s)
+           , n `elem` map fst (defOuts def) ->
+      err ("local " ++ show n ++ " clashes with an output port of " ++ show d)
+    _ -> return ()
 
 -- | Pass 2 over a component body: drivers of local wires.
 bodyDriver :: BodyStmt -> E ()
@@ -605,16 +637,24 @@ declStmt (SDef d) = do
   let dn = defName d
       ps = defPorts d
       params = defParams d
+      outs = map fst (defOuts d)
   forM_ ps $ \(p, _) -> do
-    when (p == defOut d) $
-      err ("port " ++ show p ++ " of " ++ show dn ++ " clashes with the output port")
+    when (p `elem` outs) $
+      err ("port " ++ show p ++ " of " ++ show dn
+           ++ " clashes with the output port")
     when (p `elem` params) $
       err ("port " ++ show p ++ " of " ++ show dn ++ " clashes with a parameter")
+  forM_ outs $ \o ->
+    when (o `elem` params) $
+      err ("output " ++ show o ++ " of " ++ show dn
+           ++ " clashes with a parameter")
   let dups = [p | p <- map fst ps, length (filter (== p) (map fst ps)) > 1]
+      odups = [o | o <- outs, length (filter (== o) outs) > 1]
       pdups = [p | p <- params, length (filter (== p) params) > 1]
-  case (dups, pdups) of
-    ((p : _), _) -> err ("duplicate port " ++ show p ++ " in " ++ show dn)
-    (_, (p : _)) -> err ("duplicate parameter " ++ show p ++ " in " ++ show dn)
+  case (dups, odups, pdups) of
+    ((p : _), _, _) -> err ("duplicate port " ++ show p ++ " in " ++ show dn)
+    (_, (o : _), _) -> err ("duplicate output " ++ show o ++ " in " ++ show dn)
+    (_, _, (p : _)) -> err ("duplicate parameter " ++ show p ++ " in " ++ show dn)
     _ -> return ()
   checkFresh dn
   modify' $ \s -> s { esDefs = M.insert dn d (esDefs s) }

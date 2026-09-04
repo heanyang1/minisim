@@ -118,6 +118,38 @@ simTests = TestList
       [ "sim 8", "clk c1 1"
       , "def stage(D) -> Y:", "\treturn dff(D, c1)"
       , "wire din = 11001010", "wire q = stage(din)" ]) "q" "xx110000"
+  , "multi-output: call yields concatenation, first output = MSB" ~: do
+      let src = unlines
+            [ "def half(a,b) -> s, co:"
+            , "\ts = a ^ b"
+            , "\tco = a & b"
+            , "wire a = 0011"
+            , "wire b = 0101"
+            , "wire y[2] = half(a, b)"
+            , "wire s = y[1]"
+            , "wire co = y[0]" ]
+      sim1 src "s" "0110"
+      sim1 src "co" "0001"
+      simV src "y" ["00", "10", "10", "01"]
+  , "multi-output: composition through local wires (full adder)" ~: do
+      let src = unlines
+            [ "def half(a,b) -> s, co:"
+            , "\ts = a ^ b"
+            , "\tco = a & b"
+            , "def full(a,b,cin) -> s, co:"
+            , "\twire t[2] = half(a, b)"
+            , "\twire u[2] = half(t[1], cin)"
+            , "\ts = u[1]"
+            , "\tco = t[0] | u[0]"
+            , "wire a = 0011"
+            , "wire b = 0101"
+            , "wire cin = 0001"
+            , "wire fa[2] = full(a, b, cin)"
+            , "wire sum = fa[1]"
+            , "wire carry = fa[0]" ]
+      sim1 src "sum" "0111"
+      sim1 src "carry" "0001"
+      simV src "fa" ["00", "10", "10", "11"]
 
     -- concatenation
   , "concat: leftmost element is the MSB" ~: do

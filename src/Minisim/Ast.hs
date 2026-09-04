@@ -90,7 +90,9 @@ data Def = Def
   { defParams :: [Name]      -- ^ parameter names (bound at instantiation)
   , defName  :: Name         -- ^ component name
   , defPorts :: [(Name, Width)] -- ^ input ports (default width 1, may use parameters)
-  , defOut   :: Name         -- ^ output port (after @->@)
+  , defOuts  :: [(Name, Maybe Width)] -- ^ output ports after @->@; the width
+                             -- is inferred from the assigned expression
+                             -- when omitted
   , defBody  :: [BodyStmt]
   }
   deriving (Eq, Show)
