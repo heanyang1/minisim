@@ -41,11 +41,17 @@ wire w1           # 1-bit wire
 wire w2[10]       # 10-bit wire (like a C array of bits)
 wire w3, w4, w5[5]
 wire w6 = w1      # declare + assign
+wire notrace h    # 'notrace': simulated, but hidden from the waveform
+
+const table[16] = 12345    # a constant signal, folded at elaboration time
+const notrace mask = 0xff  # width inferred from the value when [n] is omitted
 
 assign w1 = 1010000           # bit-sequence: 1 at t1, 0 at t2, 1 at t3, ...
 assign w2 = 0x11, 13, 0x5     # per-timestamp constants, 0-padded at the end
 assign w3 = c1 ? w1 & w2[0] : !00010   # C-like expression
 assign w5[1] = w3             # bit select; each bit is assigned at most once
+wire cat[4] = {w1, w2[0], 1, table[3]}  # concatenation, leftmost = MSB
+wire y = table[cat]           # index with a signal: a mux over the bits
 
 def and(A, B) -> Y: Y = A & B          # one-line component
 def or(A[2]) -> Y:                     # multi-line body (indented)
@@ -60,8 +66,9 @@ wire r = latch(D, E)  # transparent latch: E=1 -> Q=D, else hold; initial x
 ### Expressions
 
 C-like precedence `?:` < `|` < `^` < `&` < `! ~` < primaries, plus
-parentheses, `w[i]` bit select and component calls. Operands are clocks,
-wires, constants (`13`, `0x11`) and bit-sequences.
+parentheses, `w[i]` bit select, `{a, b, c}` concatenation and component
+calls. Operands are clocks, wires, constants (`13`, `0x11`), parameters and
+bit-sequences.
 
 * **Bit-sequence literal**: two or more digits of `0`/`1` only (`1010000`) --
   the n-th digit is the value at timestamp n, padded with `0` afterwards.
@@ -70,11 +77,18 @@ wires, constants (`13`, `0x11`) and bit-sequences.
   the context is wider, but a constant that does not fit the required width
   (e.g. `assign w5[2] = 2`, where the target is a single bit) is an error --
   values are never silently truncated.
+* **Concatenation** `{a, b[2], 1}`: the width is the sum of the parts, the
+  leftmost element becomes the most significant bits.
+* **Bit select** `w[i]`: a constant index is checked against the width at
+  elaboration. `w[k]` with a signal `k` selects the bit whose number is the
+  value of `k` at each timestamp (a mux); an unknown index, or one out of
+  range, yields `x`.
 * Binary operators work bitwise; the narrower operand is zero-extended to the
   wider one. `!` (logical not) yields 1 bit, `~` (bitwise not) keeps the width.
 * Assignments require matching widths (except constants, which adapt).
 * `x` (unknown) originates only from dff/latch initial state and never-assigned
   bits; it propagates Verilog-style (`0 & x = 0`, `1 | x = 1`, otherwise `x`).
+  It cannot be written by the user.
 
 ### Clocks and time
 
@@ -113,14 +127,42 @@ dff exactly. If you prefer the delayed variant, it is a one-line change in
 
 ### Components
 
-`def name(port[width], ...) -> out:` followed by an inline
+`def name<P1, P2>(port[width], ...) -> out:` followed by an inline
 `out = expr` (or `return expr`) or an indented body with a single result
-statement. Components are single-output; instantiation inlines the body with
-argument expressions substituted for ports (widths must match; clocks and
-constants are visible inside bodies, wires are not -- pass them as ports).
-Recursive components are rejected. `dff`/`latch` are reserved built-ins
-available everywhere, one state element per instantiation site (also inside
-components, e.g. `def stage(D) -> Q: return dff(D, c1)`).
+statement. The optional `<>` list names Verilog-like **parameters**
+(elaboration-time integers, given at the instantiation site); they are usable
+as constants and as widths inside the body. A body may also declare
+
+* local **wires** (`wire key[4] = {D,C,B,A}`),
+* local **constants** (`const notrace table[16] = Num`),
+* **named instances** of other components (`Lut<12345> l1, l2`).
+
+Components are single-output; each instantiation binds arguments to ports
+(widths must match; clocks and constants are visible inside bodies, wires are
+not -- pass them as ports). Recursive components are rejected. `dff`/`latch`
+are reserved built-ins available everywhere, one state element per
+instantiation site (also inside components, e.g.
+`def stage(D) -> Q: return dff(D, c1)`).
+
+### Instantiation and hierarchy
+
+A component can be instantiated with or without a name:
+
+```c
+Lut<12345> l1, l2          # statement: declares named instances
+def Lut<Num>(A,B,C,D) -> Y: ...
+wire out1 = l1(in1,in2,in3,in4)   # use a named instance (exactly once)
+wire out4 = Lut<23456>(...)       # anonymous: a fresh instance per call
+```
+
+Each named instantiation is one physical component and can be used exactly
+once (using it twice is an error); anonymous calls make a fresh instance
+every time (`Lut$1`, `Lut$2`, ...). Local signals are hoisted into the design
+under hierarchical names and appear that way in the waveform: the wire `key`
+inside instance `l1` is `l1.key`; an instance `s2` used inside a component
+instantiated as `s1` gives `s1.s2.wire1`. Declaring a wire `notrace` (or a
+`const notrace`) hides it from the waveform while keeping it in the design.
+See `examples/lut.hdl` for all of this in one place.
 
 ## Adjustments to the original sample syntax
 
@@ -134,16 +176,19 @@ components, e.g. `def stage(D) -> Q: return dff(D, c1)`).
   bit; it is now `= 1`).
 * Bit-select indices are constants; unassigned bits simulate as `x` (a warning
   is printed).
+* `examples/lut.hdl` extends the language with parameters (`<>`), local
+  wires/consts in bodies, `notrace`, `{}` concatenation, signal indexing and
+  named instances (see "Instantiation and hierarchy" above).
 
 ## Output
 
 WaveDrom JSON: 1-bit signals as `0/1/x` wave strings (`.` = unchanged);
 multi-bit signals as data states (`2` + `data` in hex; a hex digit whose bits
 contain an unknown is rendered `x`). Signals appear in declaration order,
-clocks first. `wavedrom2svg.py` renders this JSON (plus a little more of the
-WaveDrom grammar: `p P z h l = |`, `head.text`, `foot.text`) to a standalone
-SVG using only the Python standard library; ticks are numbered from 1 to match
-the simulator's timestamps.
+clocks first. `wavedrom2svg.py` renders this JSON to a standalone SVG using the
+[`wavedrom`](https://pypi.org/project/wavedrom/) Python package (so the full
+WaveDrom grammar works, not just minisim's subset); ticks are numbered from 1
+to match the simulator's timestamps.
 
 ## CI & releases (GitHub Actions)
 
@@ -174,7 +219,7 @@ src/Minisim/Parser.hs   parsec parser (line/indentation aware)
 src/Minisim/Elab.hs     name/width checks, component inlining, sim length
 src/Minisim/Sim.hs      the simulation loop (x propagation, loop detection)
 src/Minisim/WaveDrom.hs WaveDrom JSON emission
-wavedrom2svg.py         JSON -> SVG renderer (stdlib only)
+wavedrom2svg.py         JSON -> SVG renderer (needs the `wavedrom` pip/pkg package)
 test/                   Haskell unit tests (HUnit, via `cabal test`)
 examples/*.hdl          samples incl. intentional error cases (bad_*.hdl)
 cabal.project           cabal project (make ghc needs no index)

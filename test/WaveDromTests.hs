@@ -40,10 +40,20 @@ waveTests = TestList
   , "bus: unchanged values repeat" ~:
       has ("\"wave\": \"2.\"")
            (render (bus 4 [[B1], [B1]]))
+  , "hierarchical names are rendered as-is" ~:
+      has "\"name\": \"l1.key\"" (render (SimResult 1 []
+           [("l1.key", 1, True)] (M.fromList [("l1.key", [[B1]])])))
+  , "notrace wires are not rendered" ~: do
+      let sr = SimResult 2 [] [("w", 1, True), ("hidden", 1, False)]
+                 (M.fromList [("w", [[B1], [B0]]), ("hidden", [[B1], [B1]])])
+      has "\"name\": \"w\"" (render sr)
+      lacks "\"hidden\"" (render sr)
   ]
  where
   render = renderWaveDrom
-  bit hist = SimResult (length hist) [] [("w", 1)] (M.fromList [("w", hist)])
-  bus w hist = SimResult (length hist) [] [("w", w)] (M.fromList [("w", hist)])
+  bit hist = SimResult (length hist) [] [("w", 1, True)] (M.fromList [("w", hist)])
+  bus w hist = SimResult (length hist) [] [("w", w, True)] (M.fromList [("w", hist)])
   has frag out = assertBool ("expected " ++ show frag ++ " in:\n" ++ out)
                              (frag `isInfixOf` out)
+  lacks frag out = assertBool ("unexpected " ++ show frag ++ " in:\n" ++ out)
+                              (not (frag `isInfixOf` out))

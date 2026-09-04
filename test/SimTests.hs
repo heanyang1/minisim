@@ -3,6 +3,8 @@ module SimTests (simTests) where
 
 import Test.HUnit
 
+import Minisim.Sim (SimResult(..))
+
 import Support (bitsOf, expectSimLeft, simulate, valsOf)
 
 simTests :: Test
@@ -117,10 +119,113 @@ simTests = TestList
       , "def stage(D) -> Y:", "\treturn dff(D, c1)"
       , "wire din = 11001010", "wire q = stage(din)" ]) "q" "xx110000"
 
+    -- concatenation
+  , "concat: leftmost element is the MSB" ~: do
+      let src = unlines
+            [ "sim 4"
+            , "wire a = 1010"
+            , "wire b = 0101"
+            , "wire c[2] = {a,b}"
+            , "wire hi = c[1]"
+            , "wire lo = c[0]" ]
+      sim1 src "hi" "1010"    -- hi follows a
+      sim1 src "lo" "0101"    -- lo follows b
+      simV src "c" ["10", "01", "10", "01"]
+  , "concat of buses" ~: simV (unlines
+      [ "sim 1"
+      , "wire a[2] = 1"
+      , "wire b[2] = 2"
+      , "wire c[4] = {a,b}" ]) "c" ["0110"]   -- a=01 is the high half, b=10 the low
+
+    -- dynamic bit select (the lut mechanism)
+  , "dynamic select: table[key]" ~: sim1 (unlines
+      [ "wire tab[8] = 32, 32"   -- 32 = 0b100000: bit 5 set
+      , "wire k[3] = 5, 0"
+      , "wire y = tab[k]" ]) "y" "10"
+  , "dynamic select: out of range gives x" ~: sim1 (unlines
+      [ "wire tab[2] = 1, 2"
+      , "wire k[2] = 1, 2"
+      , "wire y = tab[k]" ]) "y" "0x"
+  , "dynamic select: unknown index gives x" ~: sim1 (unlines
+      [ "sim 2"
+      , "wire tab[4] = 1, 2"
+      , "wire u[2]"
+      , "wire y = tab[u]" ]) "y" "xx"
+
+    -- parameters, const, named instances: the full lut example
+  , "lut: named instances, parameters, const, dynamic select" ~: do
+      let src = unlines
+            [ "wire in1 = 11001010"
+            , "wire in2 = 01001010"
+            , "wire in3 = 11101010"
+            , "wire in4 = 11001110"
+            , "def Lut<Num>(A,B,C,D) -> Y:"
+            , "\tconst notrace table[16] = Num"
+            , "\twire key[4] = {D,C,B,A}"
+            , "\treturn table[key]"
+            , "Lut<12345> l1,l2"
+            , "wire out1 = l1(in1,in2,in3,in4)"
+            , "wire out2 = l2(in2,in1,in3,in4)"
+            , "wire out4 = Lut<23456>(in1,in2,in4,in3)"
+            , "wire out5 = Lut<23456>(in2,in1,in4,in3)" ]
+      sim1 src "out1" "10110001"
+      sim1 src "out2" "00110001"
+      sim1 src "out4" "00100000"
+      sim1 src "out5" "10100000"
+      case simulate src of
+        Left e -> assertFailure ("simulation failed: " ++ e)
+        Right sr -> do
+          -- hierarchical signal names appear in the waveform ...
+          valsOf sr "l1.key" @?=
+            ["1101", "1111", "0100", "0000", "1111", "1000", "1111", "0000"]
+          -- ... notrace'd consts do not
+          assertBool "l1.table must not be traced"
+            (not (any (\(n, _, t) -> t && n == "l1.table") (srWires sr)))
+          assertBool "anonymous instances get unique names"
+            (all (\p -> any (\(n, _, t) -> t && n == p) (srWires sr))
+                 ["Lut$1.key", "Lut$2.key"])
+  , "named instances hold independent state" ~:
+      case simulate (unlines
+        [ "clk c1 1"
+        , "def stage(D) -> Y:"
+        , "\twire q = dff(D, c1)"
+        , "\treturn q"
+        , "wire din = 11001010"
+        , "stage s1, s2"
+        , "wire q1 = s1(din)"
+        , "wire q2 = s2(~din)" ]) of
+        Left e -> assertFailure ("simulation failed: " ++ e)
+        Right sr -> do
+          bitsOf sr "q1" @?= "xx110000"
+          bitsOf sr "q2" @?= "xx001111"   -- independent state per instance
+  , "nested instantiation names wires s1.s2.w" ~:
+      case simulate (unlines
+        [ "def inner(A) -> Y:"
+        , "\twire t = ~A"
+        , "\treturn t"
+        , "def outer(A) -> Y:"
+        , "\tinner i1"
+        , "\twire u = i1(A)"
+        , "\treturn u"
+        , "wire a = 1010"
+        , "outer s1"
+        , "wire y = s1(a)" ]) of
+        Left e -> assertFailure ("simulation failed: " ++ e)
+        Right sr -> do
+          bitsOf sr "s1.i1.t" @?= "0101"
+          bitsOf sr "s1.u" @?= "0101"
+
     -- combinational loops
   , "err: self loop" ~: expectSimLeft "combinational loop" "sim 4\nwire w = ~w"
   , "err: two-wire loop" ~:
       expectSimLeft "combinational loop" "sim 4\nwire a = ~b\nwire b = ~a"
+  , "err: loop through component locals" ~:
+      expectSimLeft "combinational loop" (unlines
+        [ "sim 4"
+        , "def f(A) -> Y:"
+        , "\twire t = ~A"
+        , "\treturn t"
+        , "wire y = f(y)" ])
   ]
  where
   sim1 src w expected = case simulate src of

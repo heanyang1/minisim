@@ -1,0 +1,29 @@
+
+wire in1 = 11001010
+wire in2 = 01001010
+wire in3 = 11101010
+wire in4 = 11001110
+
+# 1. Support defining verilog-like parameters in `<>` 
+def Lut<Num>(A,B,C,D) -> Y:
+    # 2. Support defining wire inside components
+    # 3. Use `const` to represent a signal that has constant value
+    # 4. Use `notrace` so the simulator won't render its waveform
+    const notrace table[16] = Num
+    # 5. Use `{}` to concatenate signals as array
+    wire key[4] = {D,C,B,A}
+    # 6. Support indexing with a signal
+    return table[key]
+
+# 7. Support instantiate components with or without names
+Lut<12345> l1,l2
+wire out1 = l1(in1,in2,in3,in4)
+wire out2 = l2(in2,in1,in3,in4)
+# wire out3 = l2(in2,in1,in4,in3) # Error: an instance can only be used once
+
+wire out4 = Lut<23456>(in1,in2,in4,in3) # instantiates a anonymous component
+wire out5 = Lut<23456>(in2,in1,in4,in3) # instantiates another anonymous component
+
+# In the waveform, the signal `key` inside `l1` has name `l1.key` and so on.
+# Each anonymous component should have a unique name.
+# Users can instantiating components inside a component definition, and the signal names will be like `s1.s2.s3.wire1`

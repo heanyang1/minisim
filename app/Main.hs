@@ -84,7 +84,8 @@ renderText sr = unlines (header : rows)
                | v <- M.findWithDefault [] n (srHist sr) ]
   headOr (b : _) = b
   headOr [] = BX
-  rows = map clockRow (srClocks sr) ++ map wireRow (srWires sr)
+  rows = map clockRow (srClocks sr) ++ map wireRow (traced (srWires sr))
+  traced ws = [(n, w) | (n, w, True) <- ws]
   bitCh B0 = '0'
   bitCh B1 = '1'
   bitCh BX = 'x'

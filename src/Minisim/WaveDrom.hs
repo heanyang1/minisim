@@ -26,7 +26,7 @@ renderWaveDrom sr = unlines
   entries =
     [ clockEntry t n m | (n, m) <- srClocks sr ]
     ++ [ wireEntry n w (M.findWithDefault [] n (srHist sr))
-       | (n, w) <- srWires sr ]
+       | (n, w, True) <- srWires sr ]   -- 'notrace' wires are not rendered
   t = srT sr
 
 -- | Entry for a clock signal; a clock's value is a pure function of time:

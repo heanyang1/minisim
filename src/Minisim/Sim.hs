@@ -13,6 +13,10 @@
 -- A latch is transparent: while @E=1@ its output follows @D@ in the same
 -- timestamp, so it is evaluated as part of step 2, reading only its own
 -- state from @t-1@.
+--
+-- The wire list includes the (hierarchically named) local wires hoisted out
+-- of component instantiations; wires declared @notrace@ keep their history
+-- but are skipped by the renderers.
 module Minisim.Sim
   ( SimResult(..)
   , runSim
@@ -30,7 +34,7 @@ import Minisim.Elab (Design(..), IExpr(..))
 data SimResult = SimResult
   { srT      :: Int                       -- ^ number of timestamps
   , srClocks :: [(Name, Integer)]         -- ^ declaration order
-  , srWires  :: [(Name, Int)]             -- ^ declaration order (name, width)
+  , srWires  :: [(Name, Int, Bool)]       -- ^ declaration order (name, width, traced)
   , srHist   :: M.Map Name [[Bit]]        -- ^ wire -> value at t = 1..T
   }
 
@@ -85,10 +89,10 @@ simStep t = do
             setDffCurQ i (if edge then pD else pQ)
   -- (2) all remaining wires, in dependency order
   wires <- gets (dWires . stDesign)
-  forM_ wires $ \(n, _) -> () <$ evalWire n
+  forM_ wires $ \(n, _, _) -> () <$ evalWire n
   -- record history
   memo <- gets stMemo
-  forM_ wires $ \(n, _) ->
+  forM_ wires $ \(n, _, _) ->
     case M.lookup n memo of
       Just v -> modify' $ \s -> s { stHist = M.insertWith (++) n [v] (stHist s) }
       Nothing -> return ()
@@ -134,6 +138,15 @@ evalWire n = do
                               , stPath = drop 1 (stPath st) }
           return v
 
+-- | The value of a little-endian bit list as an index (unknowns give x).
+bitsIndex :: [Bit] -> Maybe Int
+bitsIndex bs
+  | any (== BX) bs = Nothing
+  | otherwise = Just (fromIntegral
+      (sum [vi b * 2 ^ i | (i, b) <- zip [0 :: Integer ..] bs]))
+ where vi B1 = 1 :: Integer
+       vi _ = 0
+
 -- | Evaluate an elaborated expression for the current timestamp.
 evalIExpr :: IExpr -> S [Bit]
 evalIExpr e = case e of
@@ -151,6 +164,12 @@ evalIExpr e = case e of
   ISel se i -> do
     v <- evalIExpr se
     return [v !! i]
+  ISelDyn ve se -> do
+    v <- evalIExpr ve
+    sv <- evalIExpr se
+    return $ case bitsIndex sv of
+      Nothing -> [BX]                      -- unknown index -> x
+      Just i -> if i < length v then [v !! i] else [BX]   -- out of range -> x
   IZExt se w -> do
     v <- evalIExpr se
     return (v ++ replicate (w - length v) B0)
@@ -176,32 +195,3 @@ evalIExpr e = case e of
         m <- gets stLatch
         return (M.findWithDefault (replicate w BX) i m)
       _ -> return (replicate w BX)          -- x enable -> x
-
---------------------------------------------------------------------------------
--- Bit-level operations (Verilog-style unknown propagation)
---------------------------------------------------------------------------------
-
-unBits :: UOp -> [Bit] -> [Bit]
-unBits OpNot v =
-  [if any (== B1) v then B0 else if any (== BX) v then BX else B1]
-unBits OpBNot v = map invB v
-
-invB :: Bit -> Bit
-invB B0 = B1
-invB B1 = B0
-invB BX = BX
-
-binBit :: BOp -> Bit -> Bit -> Bit
-binBit OpAnd B0 _ = B0
-binBit OpAnd _ B0 = B0
-binBit OpAnd BX _ = BX
-binBit OpAnd _ BX = BX
-binBit OpAnd B1 B1 = B1
-binBit OpOr B1 _ = B1
-binBit OpOr _ B1 = B1
-binBit OpOr BX _ = BX
-binBit OpOr _ BX = BX
-binBit OpOr B0 B0 = B0
-binBit OpXor BX _ = BX
-binBit OpXor _ BX = BX
-binBit OpXor a b = if a == b then B0 else B1
