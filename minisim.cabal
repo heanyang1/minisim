@@ -1,6 +1,6 @@
 cabal-version:      2.4
 name:               minisim
-version:            0.1.0.0
+version:            0.2.0.0
 synopsis:           A tiny HDL simulator producing WaveDrom JSON
 description:
   minisim parses a small Verilog-flavoured HDL (clocks, wires, bit
@@ -9,8 +9,7 @@ description:
   A companion Python script (wavedrom2svg.py) renders the JSON to SVG.
 category:           Hardware
 author:             minisim contributors
-maintainer:         minisim@example.org
-license:            BSD-3-Clause
+license:            MIT
 build-type:         Simple
 
 library
