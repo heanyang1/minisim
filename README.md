@@ -10,6 +10,8 @@ that JSON to SVG for visual verification.
 ```
             parsec                elaboration             simulation
 sample.hdl ────────► AST ───────► IExpr driver graph ────────► values ───► WaveDrom JSON ───► SVG
+                      │
+                      └─ --diagram ─► HDElk circuit-diagram JSON (see "Circuit diagrams")
 ```
 
 ## Quick start
@@ -20,10 +22,15 @@ make ghc         # offline fallback: plain ghc (parsec/mtl ship with GHC)
 ./minisim sample.txt              # WaveDrom JSON to stdout
 cabal run minisim -- sample.txt   # same, without copying the binary
 ./minisim --text sample.txt       # ASCII table (handy for debugging)
+./minisim --diagram sample.txt    # HDElk circuit-diagram JSON (see below)
 ./minisim a.hdl b.hdl            # several files: concatenated in order, simulated as one
 python3 wavedrom2svg.py out/sample.json -o out/sample.svg
 make test       # unit tests (cabal test) + binary smoke test
 make svg        # render all examples to out/*.svg and out/*.png
+make diagrams   # HDElk circuit-diagram JSON for all examples, to out/*.hdelk.json
+                                 # (+ out/*.hdelk.svg when the hdelk tools are set up)
+make hdelk-tools  # once: fetch hdelk from GitHub + npm-install jsdom (gitignored tools/)
+node hdelk2svg.js out/sample.hdelk.json -o out/sample.hdelk.svg   # one diagram to SVG
 ```
 
 ## Multiple input files
@@ -40,7 +47,7 @@ offending text came from; other errors carry the file list as a prefix.
 Statements live one per line (`;` chains statements on a line), `#` starts a
 comment, component bodies are indented (Python-style).
 
-```c
+```python
 # clocks: divided from the implicit clock by a power of two
 clk c1 1          # same frequency as the implicit clock
 clk c2 2          # half frequency
@@ -222,6 +229,67 @@ clocks first. `wavedrom2svg.py` renders this JSON to a standalone SVG using the
 WaveDrom grammar works, not just minisim's subset); ticks are numbered from 1
 to match the simulator's timestamps.
 
+## Circuit diagrams (`--diagram`)
+
+`minisim --diagram input.hdl` skips the simulation and emits an
+[HDElk](https://davidthings.github.io/hdelk/) JSON graph of the circuit's
+*structure* instead (a `--diagram` variant of the multi-input form works too;
+`--text` and `--diagram` are mutually exclusive). The mapping is:
+
+* `assign a = b&c|d` (or `wire a = ...`) is **one component**: a node with
+  inputs `b, c, d` (one port per referenced signal, in textual order),
+  output `a`, and the assigned expression as its `type`. `assign w[i] = e`
+  drives a node named `w[i]`.
+* wires -- clocks, bit-sequence / value-list drivers and constant-driven
+  wires -- are drawn as input pins and (notched) constant nodes and carry
+  no `type`; literals used inside expressions appear as shared constant
+  nodes. Only components (expressions, `dff`/`latch`, instances) and `const`
+  declarations carry a `type`.
+* `dff`/`latch` calls are leaf nodes (`D`/`CP` or `D`/`E` in, `Q` out).
+* each instantiation of a user-defined component is one node carrying the
+  component's ports (and `Name=value` parameters); its internals — the
+  body's gates, constants and nested instances — are drawn as children,
+  recursively, **unless** the component is declared `def notrace`, in which
+  case it stays a black box. Clocks and top-level constants visible inside a
+  body are re-drawn as pins within each expanded instance (HDElk/ELK edges
+  cannot cross hierarchy levels).
+* multi-bit connections are drawn as bus edges; a whole reference to a
+  bit-driven wire (`assign pair[0] = ...; ... or(pair)`) fans in from every
+  bit's node.
+
+Diagram mode only parses and resolves names, so it needs no simulation
+length (no bit-sequence literal or `sim N` required), while still reporting
+unknown names, unknown components and recursive definitions. Structural
+views of programs the simulator would reject (combinational loops, twice-used
+instances) are drawn anyway.
+
+### Rendering diagram JSON to SVG
+
+`hdelk2svg.js` renders the JSON with HDElk's own sources
+(`hdelk.js` + `elk.bundled.js` + `svg.min.js` from
+[github.com/davidthings/hdelk](https://github.com/davidthings/hdelk)), loaded
+into a [jsdom](https://github.com/jsdom/jsdom) window — the same trick
+HDElk's own headless smoke test uses (current `hdelk.js` also gets two small
+in-memory fixes there: its font sizes are unitless CSS values that every
+engine drops, and its port-label inset ignores svg.js's line spacing — both
+still correct in the browser renders the hdelk project ships). Nothing of
+hdelk's is committed here:
+
+```
+make hdelk-tools     # once: shallow-clones hdelk to tools/hdelk and
+                     # npm-installs jsdom to tools/node_modules (both gitignored)
+node hdelk2svg.js out/shift.hdelk.json -o out/shift.hdelk.svg
+cat out/shift.hdelk.json | node hdelk2svg.js > out/shift.hdelk.svg
+make diagrams        # JSON for all examples; also renders *.hdelk.svg when the
+                     # tools are set up (skips SVG rendering otherwise)
+```
+
+`HDELK_HOME` / `HDELK_JSDOM` point the script at an existing hdelk checkout
+or jsdom module; jsdom has no font engine, so text widths are approximated
+and label spacing differs slightly from a browser rendering (paste the JSON
+into the HDElk [editor](https://davidthings.github.io/hdelk/editor) for a
+pixel-perfect view).
+
 ## CI & releases (GitHub Actions)
 
 `.github/workflows/ci.yml` runs on every push and pull request:
@@ -245,13 +313,17 @@ git push origin v0.1.0     # -> release "minisim v0.1.0" with the two archives
 ## Layout
 
 ```
-app/Main.hs             CLI, --text debug dump
+app/Main.hs             CLI, --text debug dump, --diagram circuit diagrams
 src/Minisim/Ast.hs      AST + Bit type
 src/Minisim/Parser.hs   parsec parser (line/indentation aware)
 src/Minisim/Elab.hs     name/width checks, component inlining, sim length
 src/Minisim/Sim.hs      the simulation loop (x propagation, loop detection)
 src/Minisim/WaveDrom.hs WaveDrom JSON emission
+src/Minisim/Diagram.hs  HDElk circuit-diagram JSON emission (--diagram)
 wavedrom2svg.py         JSON -> SVG renderer (needs the `wavedrom` pip/pkg package)
+hdelk2svg.js            HDElk-diagram JSON -> SVG, using hdelk's own sources
+                        (needs node + jsdom; run `make hdelk-tools` once)
+tools/setup.sh          one-time fetch of hdelk + jsdom (gitignored tools/)
 test/                   Haskell unit tests (HUnit, via `cabal test`)
 examples/*.hdl          samples incl. intentional error cases (bad_*.hdl)
 cabal.project           cabal project (make ghc needs no index)

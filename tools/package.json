@@ -1,0 +1,9 @@
+{
+  "name": "minisim-hdelk-tools",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Render-time dependencies for ../hdelk2svg.js (jsdom). Installed by setup.sh into tools/node_modules; not part of minisim itself.",
+  "dependencies": {
+    "jsdom": "^24.1.3"
+  }
+}

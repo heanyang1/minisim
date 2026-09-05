@@ -17,3 +17,7 @@ __pycache__/
 
 # generated diagrams (make svg)
 out/
+
+# hdelk rendering tools (downloaded by tools/setup.sh, see make hdelk-tools)
+tools/hdelk/
+tools/node_modules/

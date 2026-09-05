@@ -10,7 +10,10 @@ renders that JSON to SVG. All deps are GHC boot libraries (parsec, containers, m
 - `make ghc` — offline fallback build with plain ghc
 - `make test` — HUnit tests (`cabal test`) + binary smoke test; or run `cabal test` directly
 - `make svg` — render all examples to `out/*.svg`/`*.png` (needs python3, rsvg-convert)
-- `cabal run minisim -- [--text] [-o out.json] input.hdl [more.hdl ...]` — run without copying; `--text` gives an ASCII debug table; several inputs are concatenated (in order) and simulated as one program
+- `make diagrams` — `--diagram` HDElk JSON for all examples, to `out/*.hdelk.json` (+ `.svg` when hdelk tools are set up)
+- `make hdelk-tools` — one-time: shallow-clone hdelk from GitHub into `tools/hdelk`, npm-install jsdom into `tools/node_modules` (gitignored; hdelk code is never committed)
+- `node hdelk2svg.js in.json [-o out.svg]` — render HDElk diagram JSON to SVG via hdelk's own sources
+- `cabal run minisim -- [--text|--diagram] [-o out.json] input.hdl [more.hdl ...]` — run without copying; `--text` gives an ASCII debug table, `--diagram` an HDElk circuit-diagram JSON; several inputs are concatenated (in order) and simulated as one program
 - `make clean` — remove build artifacts (`dist-newstyle/`, `build/`, `out/`, `./minisim`)
 
 ## Architecture
@@ -19,6 +22,9 @@ Pipeline: `Minisim.Parser` (parsec) → `Minisim.Ast` → `Minisim.Elab` (elabor
 to a flat `IExpr` driver graph, constants folded) → `Minisim.Sim` (per-timestamp
 event simulation; dff outputs first, then combinational wires via memoized DFS;
 combinational loops are errors) → `Minisim.WaveDrom` (JSON). CLI in `app/Main.hs`.
+`--diagram` instead goes AST → `Minisim.Diagram` (HDElk JSON circuit diagram,
+built from the AST alone — no simulation length needed; `def notrace`
+components stay black boxes).
 
 - `src/Minisim/` — library modules; `test/` — HUnit suite (TestMain + one file per module)
 - `examples/*.hdl` — sample programs; `bad_*.hdl` are intentionally invalid (error-message checks); `multi_top.hdl` + `multi_lib.hdl` are a multi-input pair

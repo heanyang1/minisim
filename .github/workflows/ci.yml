@@ -57,6 +57,8 @@ jobs:
         run: |
           cabal run minisim -- --text sample.txt > /dev/null
           cabal run minisim -- --text examples/multi_top.hdl examples/multi_lib.hdl > /dev/null
+          cabal run minisim -- --diagram sample.txt > /dev/null
+          cabal run minisim -- --diagram examples/multi_top.hdl examples/multi_lib.hdl > /dev/null
 
   binaries:
     name: Build ${{ matrix.platform }} binary

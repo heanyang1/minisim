@@ -5,6 +5,7 @@ import System.Exit (exitWith, ExitCode(..))
 import Test.HUnit (Counts(..), Test(..), runTestTT)
 
 import ElabTests (elabTests)
+import DiagramTests (diagramTests)
 import ParserTests (parserTests)
 import SimTests (simTests)
 import WaveDromTests (waveTests)
@@ -15,6 +16,7 @@ main = do
     runTestTT $ TestList
       [ TestLabel "parser"   parserTests
       , TestLabel "elaboration" elabTests
+      , TestLabel "diagram" diagramTests
       , TestLabel "simulation"  simTests
       , TestLabel "wavedrom" waveTests
       ]

@@ -18,6 +18,7 @@ library
     exposed-modules:  Minisim.Ast
                     , Minisim.Parser
                     , Minisim.Elab
+                    , Minisim.Diagram
                     , Minisim.Sim
                     , Minisim.WaveDrom
     build-depends:    base >=4 && <5
@@ -44,6 +45,7 @@ test-suite minisim-test
     other-modules:    Support
                     , ParserTests
                     , ElabTests
+                    , DiagramTests
                     , SimTests
                     , WaveDromTests
     build-depends:    base >=4 && <5

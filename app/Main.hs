@@ -11,7 +11,8 @@ import System.IO
 import Text.Parsec.Error (ParseError, errorPos, setErrorPos)
 import Text.Parsec.Pos (newPos, sourceColumn, sourceLine)
 
-import Minisim.Ast (Bit(..))
+import Minisim.Ast (Bit(..), Program)
+import Minisim.Diagram (renderDiagram)
 import Minisim.Elab (Design(..), elaborate)
 import Minisim.Parser (parseProgram)
 import Minisim.Sim (SimResult(..), runSim)
@@ -21,14 +22,24 @@ data Opts = Opts
   { optInputs :: [FilePath]
   , optOutput :: Maybe FilePath
   , optText   :: Bool
+  , optDiagram :: Bool
   }
 
 defaultOpts :: Opts
-defaultOpts = Opts [] Nothing False
+defaultOpts = Opts [] Nothing False False
 
 parseOpts :: [String] -> Either String Opts
 parseOpts ("-o" : f : rest) = (\o -> o { optOutput = Just f }) <$> parseOpts rest
-parseOpts ("--text" : rest) = (\o -> o { optText = True }) <$> parseOpts rest
+parseOpts ("--text" : rest) = do
+  o <- parseOpts rest
+  if optDiagram o
+    then Left "--text and --diagram are mutually exclusive"
+    else Right o { optText = True }
+parseOpts ("--diagram" : rest) = do
+  o <- parseOpts rest
+  if optText o
+    then Left "--text and --diagram are mutually exclusive"
+    else Right o { optDiagram = True }
 parseOpts ("-h" : _) = usageErr
 parseOpts ("--help" : _) = usageErr
 parseOpts (f : rest)
@@ -37,7 +48,7 @@ parseOpts (f : rest)
 parseOpts [] = Right defaultOpts
 
 usage :: String
-usage = "usage: minisim [--text] [-o out.json] input.hdl [more.hdl ...]"
+usage = "usage: minisim [--text | --diagram] [-o out.json] input.hdl [more.hdl ...]"
 
 usageErr :: Either String a
 usageErr = Left usage
@@ -53,14 +64,28 @@ main = do
       [] -> hPutStrLn stderr usage >> exitFailure
       fs -> do
         inputs <- readInputs fs
-        case inputs >>= compile of
+        case inputs >>= run opts of
           Left e -> hPutStrLn stderr ("minisim: " ++ e) >> exitFailure
-          Right (warnings, sr) -> do
+          Right (warnings, out) -> do
             forM_ warnings $ \w -> hPutStrLn stderr ("minisim: warning: " ++ w)
-            let out = if optText opts then renderText sr else renderWaveDrom sr
             case optOutput opts of
               Just f -> writeFile f out
               Nothing -> putStr out
+
+-- | Compile and render according to the mode: @--diagram@ renders the
+-- circuit structure from the AST (no simulation needed), otherwise the
+-- program is simulated for its waveform (or ASCII table).
+run :: Opts -> [(FilePath, String)] -> Either String ([String], String)
+run opts files
+  | optDiagram opts = do
+      prog <- parseAll files
+      out <- tagged (labelOf (map fst files)) (renderDiagram prog)
+      return ([], out)
+  | otherwise = do
+      (ws, sr) <- compile files
+      return (ws, if optText opts then renderText sr else renderWaveDrom sr)
+ where
+  tagged l = either (Left . ((l ++ ": ") ++)) Right
 
 -- | Read every input file; one that cannot be read fails the whole run with
 -- its IO error (which mentions the file name).
@@ -74,24 +99,29 @@ readInputs = go []
       Left ioe -> return (Left (show ioe))
       Right s -> go ((f, s) : acc) rest
 
--- | Simulate several input files as one program: their texts are
--- concatenated (in command-line order, each terminated by a newline) and
--- compiled exactly like a single file.
-compile :: [(FilePath, String)] -> Either String ([String], SimResult)
-compile files = do
+-- | Parse several input files as one program: their texts are
+-- concatenated (in command-line order, each terminated by a newline).
+parseAll :: [(FilePath, String)] -> Either String Program
+parseAll files =
   let srcs = map (ensureNl . snd) files
       starts = init (scanl (+) 1 (map countLines srcs))
       names = map fst files
-      label = case names of
-        [f] -> f
-        fs -> intercalate "+" fs
-  prog <- either (Left . remapParseError names starts) Right
-                (parseProgram "input" (concat srcs))
+  in either (Left . remapParseError names starts) Right
+       (parseProgram "input" (concat srcs))
+
+-- | Simulate several input files as one program.
+compile :: [(FilePath, String)] -> Either String ([String], SimResult)
+compile files = do
+  prog <- parseAll files
+  let label = labelOf (map fst files)
+      tagged l = either (Left . ((l ++ ": ") ++)) Right
   design <- tagged label (elaborate prog)
   sr <- tagged label (runSim design)
   return (dWarn design, sr)
- where
-  tagged l = either (Left . ((l ++ ": ") ++)) Right
+
+labelOf :: [FilePath] -> FilePath
+labelOf [f] = f
+labelOf fs = intercalate "+" fs
 
 -- A file's text is terminated with a newline so that the last line of one
 -- file cannot merge with the first line of the next.
