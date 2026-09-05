@@ -1,0 +1,23 @@
+# `def notrace` hides every internal signal of that component's instances:
+# local wires, consts and nested instances are still simulated, they just do
+# not appear in the waveform.  Compare `wire notrace h2` below, which hides a
+# single signal instead of a whole module.
+
+wire a = 11001010
+wire b = 10101010
+
+def half(x, y) -> s, co:          # a traced half adder
+	wire t[2] = {x&y, x^y}    # t is visible in the waveform as t[2]
+	s = t[0]
+	co = t[1]
+
+def notrace nhalf(x, y) -> s, co: # same body, but nothing inside shows
+	wire t[2] = {x&y, x^y}
+	s = t[0]
+	co = t[1]
+
+wire v[2] = half(a, b)            # {s, co}
+wire h[2] = nhalf(a, b)           # identical values, but no nhalf.t signal
+
+wire notrace h2 = a               # single hidden signal (still simulated)
+wire o = h2 ^ b                   # h2 can be used like any wire

@@ -7,6 +7,8 @@
 -- other components.  Locals of an instance are hoisted into the global wire
 -- map under hierarchical names (@l1.key@, @s1.s2.wire1@, ...), so the
 -- simulator sees a flat graph while the waveform keeps the hierarchy.
+-- A wire/const declared @notrace@ (or a whole component declared
+-- @def notrace@) is kept in the design but hidden from the waveform.
 module Minisim.Elab
   ( IExpr(..)
   , Design(..)
@@ -82,6 +84,8 @@ data EState = EState
   , esLocalInsts  :: M.Map Name (Name, [Integer]) -- ^ body-local instances
   , esLocalInstUsed :: S.Set Name      -- ^ body-local instances already used
   , esConstCtx :: Bool                 -- ^ elaborating a const initializer
+  , esHide    :: Bool                  -- ^ inside a @notrace@ component: hide
+                                       -- every hoisted internal signal
   , esVisiting :: S.Set Name           -- ^ components on the instantiation stack
   , esWhole    :: M.Map Name IExpr     -- ^ whole-wire drivers (pass 2)
   , esBits     :: M.Map Name (M.Map Int IExpr)
@@ -96,7 +100,8 @@ initialEState = EState
   , esInsts = M.empty, esInstUsed = S.empty, esAnon = 1
   , esInDef = Nothing, esPorts = M.empty, esParams = M.empty, esPrefix = ""
   , esLocals = M.empty, esLocalConsts = M.empty, esLocalInsts = M.empty
-  , esLocalInstUsed = S.empty, esConstCtx = False, esVisiting = S.empty
+  , esLocalInstUsed = S.empty, esConstCtx = False, esHide = False
+  , esVisiting = S.empty
   , esWhole = M.empty, esBits = M.empty, esWarn = [] }
 
 type E a = StateT EState (Either String) a
@@ -413,6 +418,7 @@ instantiateBody prefix compName ps args = do
     return (pn, (ie, pw))
   -- enter the component scope
   old <- get
+  hide <- gets esHide
   modify' $ \st -> st { esInDef = Just compName
                       , esPorts = M.fromList envList
                       , esParams = pmap
@@ -421,6 +427,7 @@ instantiateBody prefix compName ps args = do
                       , esLocalConsts = M.empty
                       , esLocalInsts = M.empty
                       , esLocalInstUsed = S.empty
+                      , esHide = hide || defNoTrace def
                       , esVisiting = S.insert compName (esVisiting st) }
   -- pass 1: declarations (wires, consts, instances)
   mapM_ bodyDecl (defBody def)
@@ -448,6 +455,7 @@ instantiateBody prefix compName ps args = do
                       , esLocalConsts = esLocalConsts old
                       , esLocalInsts = esLocalInsts old
                       , esLocalInstUsed = esLocalInstUsed old
+                      , esHide = esHide old
                       , esVisiting = esVisiting old }
   return r
 
@@ -526,10 +534,11 @@ declLocalWire tr (n, wd) = do
   checkLocalFresh n
   s <- get
   let g = esPrefix s ++ n
+      traced = not tr && not (esHide s)   -- a notrace module hides everything
   checkFresh g
   modify' $ \st -> st { esWires = M.insert g w (esWires st)
                       , esWireOrd = esWireOrd st ++ [g]
-                      , esTrace = M.insert g (not tr) (esTrace st)
+                      , esTrace = M.insert g traced (esTrace st)
                       , esLocals = M.insert n (g, w) (esLocals st) }
 
 -- | Declare a local constant and fold its (compile-time) value.
@@ -549,10 +558,11 @@ bodyConst tr mwd n e = do
   let bits' = bits ++ replicate (w - length bits) B0
   s <- get
   let g = esPrefix s ++ n
+      traced = not tr && not (esHide s)   -- a notrace module hides everything
   checkFresh g
   modify' $ \st -> st { esWires = M.insert g w (esWires st)
                       , esWireOrd = esWireOrd st ++ [g]
-                      , esTrace = M.insert g (not tr) (esTrace st)
+                      , esTrace = M.insert g traced (esTrace st)
                       , esConsts = S.insert g (esConsts st)
                       , esLocalConsts = M.insert n bits' (esLocalConsts st)
                       , esLocals = M.insert n (g, w) (esLocals st)

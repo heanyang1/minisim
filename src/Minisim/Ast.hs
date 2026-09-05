@@ -87,7 +87,9 @@ data BodyStmt
   deriving (Eq, Show)
 
 data Def = Def
-  { defParams :: [Name]      -- ^ parameter names (bound at instantiation)
+  { defNoTrace :: Bool       -- ^ @def notrace ...@: hide every internal signal
+                             -- of this component's instances in the waveform
+  , defParams :: [Name]      -- ^ parameter names (bound at instantiation)
   , defName  :: Name         -- ^ component name
   , defPorts :: [(Name, Width)] -- ^ input ports (default width 1, may use parameters)
   , defOuts  :: [(Name, Maybe Width)] -- ^ output ports after @->@; the width

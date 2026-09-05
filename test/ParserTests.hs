@@ -115,35 +115,43 @@ parserTests = TestList
   -- components
   , "one-line def" ~:
       parsesTo "def and(A,B) -> Y: Y=A&B"
-        (Program [SDef (Def [] "and" [("A", WConst 1), ("B", WConst 1)] [("Y", Nothing)]
+        (Program [SDef (Def False [] "and" [("A", WConst 1), ("B", WConst 1)] [("Y", Nothing)]
                   [BAssign "Y" (EBin OpAnd (EVar "A") (EVar "B"))])])
+  , "notrace def" ~:
+      parsesTo "def notrace f(A) -> Y: return A"
+        (Program [SDef (Def True [] "f" [("A", WConst 1)] [("Y", Nothing)]
+                  [BReturn (EVar "A")])])
+  , "notrace def with parameters and body" ~:
+      parsesTo "def notrace Lut<Num>(A) -> Y:\n\treturn A|Num"
+        (Program [SDef (Def True ["Num"] "Lut" [("A", WConst 1)] [("Y", Nothing)]
+                  [BReturn (EBin OpOr (EVar "A") (EVar "Num"))])])
   , "one-line def with return" ~:
       parsesTo "def n(A) -> Y: return ~A"
-        (Program [SDef (Def [] "n" [("A", WConst 1)] [("Y", Nothing)] [BReturn (EUn OpBNot (EVar "A"))])])
+        (Program [SDef (Def False [] "n" [("A", WConst 1)] [("Y", Nothing)] [BReturn (EUn OpBNot (EVar "A"))])])
   , "def with parameters" ~:
       parsesTo "def Lut<Num>(A,B,C,D) -> Y: return A"
-        (Program [SDef (Def ["Num"] "Lut"
+        (Program [SDef (Def False ["Num"] "Lut"
                     [("A", WConst 1), ("B", WConst 1), ("C", WConst 1), ("D", WConst 1)]
                     [("Y", Nothing)] [BReturn (EVar "A")])])
   , "def with parameter width" ~:
       parsesTo "def f<W>(A[W]) -> Y: return A[0]"
-        (Program [SDef (Def ["W"] "f" [("A", WName "W")] [("Y", Nothing)]
+        (Program [SDef (Def False ["W"] "f" [("A", WName "W")] [("Y", Nothing)]
                     [BReturn (EIdx "A" (EConst 0))])])
   , "indented def body ends at unindented line" ~:
       parsesTo "def or(A[2]) -> Y:\n\treturn A[0]|A[1]\nwire z = 1"
-        (Program [ SDef (Def [] "or" [("A", WConst 2)] [("Y", Nothing)]
+        (Program [ SDef (Def False [] "or" [("A", WConst 2)] [("Y", Nothing)]
                     [BReturn (EBin OpOr (EIdx "A" (EConst 0)) (EIdx "A" (EConst 1)))])
                  , SWireInit False "z" (WConst 1) [EConst 1] ])
   , "def body with blank and comment lines" ~:
       parsesTo "def f(A) -> Y:\n\n\t# comment\n\tY = A\n"
-        (Program [SDef (Def [] "f" [("A", WConst 1)] [("Y", Nothing)] [BAssign "Y" (EVar "A")])])
+        (Program [SDef (Def False [] "f" [("A", WConst 1)] [("Y", Nothing)] [BAssign "Y" (EVar "A")])])
   , "def body with local wires, consts and instances" ~:
       parsesTo (unlines
         [ "def Lut<Num>(A,B,C,D) -> Y:"
         , "\tconst notrace table[16] = Num"
         , "\twire key[4] = {D,C,B,A}"
         , "\treturn table[key]" ])
-        (Program [SDef (Def ["Num"] "Lut"
+        (Program [SDef (Def False ["Num"] "Lut"
             [("A", WConst 1), ("B", WConst 1), ("C", WConst 1), ("D", WConst 1)] [("Y", Nothing)]
             [ BConst True (Just (WConst 16)) "table" (EVar "Num")
             , BWireInit False "key" (WConst 4)
@@ -151,7 +159,7 @@ parserTests = TestList
             , BReturn (EIdx "table" (EVar "key")) ])])
   , "local instance statement in a body" ~:
       parsesTo "def f(A) -> Y:\n\tLut<5> l1\n\treturn l1(A,A,A,A)"
-        (Program [SDef (Def [] "f" [("A", WConst 1)] [("Y", Nothing)]
+        (Program [SDef (Def False [] "f" [("A", WConst 1)] [("Y", Nothing)]
             [ BInst "Lut" [5] ["l1"]
             , BReturn (ECall "l1" [] (replicate 4 (Nothing, EVar "A"))) ])])
   , "def with multiple outputs" ~:
@@ -160,19 +168,19 @@ parserTests = TestList
         , "\tc = a&b"
         , "\td = a|b"
         , "\te = a^b" ])
-        (Program [SDef (Def [] "c1" [("a", WConst 1), ("b", WConst 1)]
+        (Program [SDef (Def False [] "c1" [("a", WConst 1), ("b", WConst 1)]
             [("c", Nothing), ("d", Nothing), ("e", Nothing)]
             [ BAssign "c" (EBin OpAnd (EVar "a") (EVar "b"))
             , BAssign "d" (EBin OpOr (EVar "a") (EVar "b"))
             , BAssign "e" (EBin OpXor (EVar "a") (EVar "b")) ])])
   , "def with output widths" ~:
       parsesTo "def f(a) -> y[4], z: y = a"
-        (Program [SDef (Def [] "f" [("a", WConst 1)]
+        (Program [SDef (Def False [] "f" [("a", WConst 1)]
             [("y", Just (WConst 4)), ("z", Nothing)]
             [BAssign "y" (EVar "a")])])
   , "def with parameter output width" ~:
       parsesTo "def f<W>(a) -> y[W]: y = a"
-        (Program [SDef (Def ["W"] "f" [("a", WConst 1)] [("y", Just (WName "W"))]
+        (Program [SDef (Def False ["W"] "f" [("a", WConst 1)] [("y", Just (WName "W"))]
             [BAssign "y" (EVar "a")])])
   , "call with positional and named args" ~:
       parsesTo "wire o = f(a, B=b)"

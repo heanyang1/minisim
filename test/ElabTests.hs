@@ -138,6 +138,60 @@ elabTests = TestList
         , "outer s1"
         , "wire y = s1(a)" ])
       map (\(n, _, _) -> n) (dWires d) @?= ["a", "y", "s1.u", "s1.i1.t"]
+  , "def notrace hides every internal signal" ~: do
+      d <- okD (unlines
+        [ "def inner(A) -> Y:"
+        , "\twire t = ~A"
+        , "\treturn t"
+        , "def notrace outer(A) -> Y:"
+        , "\tinner i1"
+        , "\twire u = i1(A)"
+        , "\treturn u"
+        , "wire a = 1010"
+        , "outer s1"
+        , "wire y = s1(a)" ])
+      -- both locals and the nested instance's internals are hidden
+      map (\(n, _, tr) -> (n, tr)) (dWires d) @?=
+        [("a", True), ("y", True), ("s1.u", False), ("s1.i1.t", False)]
+  , "nested notrace def hides only its own internals" ~: do
+      d <- okD (unlines
+        [ "def notrace inner(A) -> Y:"
+        , "\twire t = ~A"
+        , "\treturn t"
+        , "def outer(A) -> Y:"
+        , "\tinner i1"
+        , "\twire u = i1(A)"
+        , "\treturn u"
+        , "wire a = 1010"
+        , "outer s1"
+        , "wire y = s1(a)" ])
+      map (\(n, _, tr) -> (n, tr)) (dWires d) @?=
+        [("a", True), ("y", True), ("s1.u", True), ("s1.i1.t", False)]
+  , "def notrace applies to each instance" ~: do
+      d <- okD (unlines
+        [ "def notrace f(A) -> Y:"
+        , "\twire t = A"
+        , "\treturn t"
+        , "wire a = 1010"
+        , "wire y1 = f(a)"
+        , "wire y2 = f(a)" ])
+      map (\(n, _, tr) -> (n, tr)) (dWires d) @?=
+        [("a", True), ("y1", True), ("y2", True)
+        ,("f$1.t", False), ("f$2.t", False)]
+  , "def notrace does not leak to later instantiations" ~: do
+      d <- okD (unlines
+        [ "def notrace f(A) -> Y:"
+        , "\twire t = A"
+        , "\treturn t"
+        , "def g(A) -> Y:"
+        , "\twire u = A"
+        , "\treturn u"
+        , "wire a = 1010"
+        , "wire y1 = f(a)"
+        , "wire y2 = g(a)" ])
+      map (\(n, _, tr) -> (n, tr)) (dWires d) @?=
+        [("a", True), ("y1", True), ("y2", True)
+        ,("f$1.t", False), ("g$2.u", True)]
   , "instance: anonymous instances get unique names" ~: do
       d <- okD (unlines
         [ "def f(A) -> Y:"

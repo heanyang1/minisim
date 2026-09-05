@@ -31,6 +31,7 @@ svg: minisim
 	./minisim examples/latch.hdl   -o out/latch.json  2>/dev/null
 	./minisim examples/clocks.hdl  -o out/clocks.json 2>/dev/null
 	./minisim examples/lut.hdl     -o out/lut.json    2>/dev/null
+	./minisim examples/notrace.hdl -o out/notrace.json 2>/dev/null
 	./minisim examples/multi_top.hdl examples/multi_lib.hdl -o out/multi.json 2>/dev/null
 	for j in out/*.json; do \
 	  python3 wavedrom2svg.py $$j -o $${j%.json}.svg && \

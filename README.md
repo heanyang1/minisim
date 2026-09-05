@@ -186,9 +186,15 @@ every time (`Lut$1`, `Lut$2`, ...). Local signals are hoisted into the design
 under hierarchical names and appear that way in the waveform: the wire `key`
 inside instance `l1` is `l1.key`; an instance `s2` used inside a component
 instantiated as `s1` gives `s1.s2.wire1`. Declaring a wire `notrace` (or a
-`const notrace`) hides it from the waveform while keeping it in the design.
-See `examples/lut.hdl` for all of this in one place and
-`examples/multiout.hdl` for multi-output components (half/full adders).
+`const notrace`) hides it from the waveform while keeping it in the design;
+declaring a whole component `notrace` (`def notrace c1(w1) -> w2:`) hides
+every internal signal of each of its instances — local wires, consts and the
+internals of nested instances — wherever they are routed (its outputs are
+expressions and appear as usual at the call site). Hidden signals are still
+simulated and keep their history, they are just not rendered.
+See `examples/lut.hdl` for all of this in one place,
+`examples/multiout.hdl` for multi-output components (half/full adders) and
+`examples/notrace.hdl` for module-level `notrace`.
 
 ## Adjustments to the original sample syntax
 

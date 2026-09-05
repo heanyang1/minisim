@@ -15,8 +15,9 @@
 -- state from @t-1@.
 --
 -- The wire list includes the (hierarchically named) local wires hoisted out
--- of component instantiations; wires declared @notrace@ keep their history
--- but are skipped by the renderers.
+-- of component instantiations; wires declared @notrace@ -- as well as every
+-- internal signal of a @def notrace@ component -- keep their history but are
+-- skipped by the renderers.
 module Minisim.Sim
   ( SimResult(..)
   , runSim

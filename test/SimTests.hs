@@ -216,6 +216,20 @@ simTests = TestList
           assertBool "anonymous instances get unique names"
             (all (\p -> any (\(n, _, t) -> t && n == p) (srWires sr))
                  ["Lut$1.key", "Lut$2.key"])
+  , "def notrace: internals are simulated but not traced" ~:
+      case simulate (unlines
+        [ "def notrace f(A) -> Y:"
+        , "\twire t = A"
+        , "\treturn t"
+        , "wire a = 11001010"
+        , "wire y = f(a)" ]) of
+        Left e -> assertFailure ("simulation failed: " ++ e)
+        Right sr -> do
+          bitsOf sr "y" @?= "11001010"
+          assertBool "f$1.t must not be traced"
+            (not (any (\(n, _, t) -> t && n == "f$1.t") (srWires sr)))
+          -- the value is still simulated and kept in the history
+          bitsOf sr "f$1.t" @?= "11001010"
   , "named instances hold independent state" ~:
       case simulate (unlines
         [ "clk c1 1"

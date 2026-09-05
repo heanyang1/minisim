@@ -245,6 +245,7 @@ defFull :: Parser [Stmt]
 defFull = do
   kwcol <- sourceColumn <$> getPosition
   keyword "def"; sp1
+  tr <- notraceOpt
   n <- ident; sp
   params <- defParamsOpt <* sp
   _ <- char '('; sp
@@ -259,7 +260,7 @@ defFull = do
               return [bs])
           <|> (finishLine *> many1 (bodyLine kwcol outNames)
                <?> "an indented component body after ':'")
-  return [SDef (Def params n ps outs body)]
+  return [SDef (Def tr params n ps outs body)]
 
 portDecl :: Parser (Name, Width)
 portDecl = do
