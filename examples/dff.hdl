@@ -1,0 +1,32 @@
+# Sequential elements are user-defined components whose body is one always
+# block (an always block may only appear in a `def notrace` component).
+# The sensitivity list is a comma-separated AND of `posedge`/`negedge`/plain
+# items (each 1 bit wide); `or` sensitivity is not supported.
+
+# This is equivalent to the built-in dff before version 0.2.0
+def notrace dff(D,CP) -> Q:
+    always(posedge CP):
+        return D
+
+# This is equivalent to the built-in latch before version 0.2.0
+def notrace latch(D,E) -> Q:
+    always(E):
+        return D
+
+# Defines a dff that changes when CP changes from 1->0 and E is available
+def notrace async_neg_dff(D,CP,E) -> Q:
+    # This is equivalent to `always@(negedge CP and posedge E)` in verilog
+    # `or` in sensitivity list is not supported
+    always(negedge CP, posedge E):  
+        wire w = E ? D : 0
+        return w
+
+# T = 8 comes from the longest bit-sequence literal (d).
+clk c1 1
+wire d  = 01101001
+wire en = 01000000    # rises exactly when c1 falls, so async_neg_dff fires
+
+wire q_dff   = dff(d, c1)
+wire q_latch = latch(d, en)
+# fires at t=2 only, loading w(t-1) = en(t-1) ? d(t-1) : 0 = 0
+wire q_async = async_neg_dff(d, c1, en)

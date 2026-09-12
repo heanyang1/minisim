@@ -81,9 +81,16 @@ def c1(a, b) -> c, d, e:               # several outputs: each is assigned once
 	e = a ^ b
 wire out[3] = c1(w1, w2)
 
-# built-in, cannot be redefined:
-wire q = dff(D, CP)   # flip-flop: Q(t+1)=D(t) on a rising CP edge, else hold; initial x
-wire r = latch(D, E)  # transparent latch: E=1 -> Q=D, else hold; initial x
+# sequential elements are user-defined components with an always block
+# (see "always blocks" below):
+def notrace dff(D, CP) -> Q:
+	always(posedge CP):        # edge-triggered: samples D at t-1 on a rising CP edge
+		return D               # flip-flop: initial x, holds between edges
+def notrace latch(D, E) -> Q:
+	always(E):                 # level-sensitive: transparent while E=1
+		return D
+wire q = dff(d, c1)
+wire r = latch(d, en)
 ```
 
 ### Expressions
@@ -109,9 +116,9 @@ bit-sequences.
 * Binary operators work bitwise; the narrower operand is zero-extended to the
   wider one. `!` (logical not) yields 1 bit, `~` (bitwise not) keeps the width.
 * Assignments require matching widths (except constants, which adapt).
-* `x` (unknown) originates only from dff/latch initial state and never-assigned
-  bits; it propagates Verilog-style (`0 & x = 0`, `1 | x = 1`, otherwise `x`).
-  It cannot be written by the user.
+* `x` (unknown) originates only from the initial state of always blocks and
+  never-assigned bits; it propagates Verilog-style (`0 & x = 0`, `1 | x = 1`,
+  otherwise `x`). It cannot be written by the user.
 
 ### Clocks and time
 
@@ -132,23 +139,21 @@ error). Without either the length is unknown and the program is rejected.
 
 For every timestamp `t`:
 
-1. Compute all dff outputs first. This is valid because a dff only needs the
-   input values of the previous timestamp (its CP input is restricted to
-   clocks/expressions of clocks, whose values are pure functions of `t`; the
-   elaborator enforces this).
-2. Compute every remaining wire in dependency order -- the graph is split into
-   trees rooted at dff outputs; a wire can be calculated once all predecessors
-   in every tree are (implemented as memoized depth-first evaluation).
-3. A wire that can never be calculated (e.g. `wire w1=~w2; wire w2=~w1`) is a
+1. Compute the wires in dependency order -- implemented as a memoized
+   depth-first evaluation of the driver graph; a wire can be calculated once
+   all its predecessors are.
+2. An always block is evaluated when the search first reaches it, reading
+   only its own state from `t-1` plus its sensitivity list at `t`. This is
+   valid because an edge-triggered block does not read its body at `t` at
+   all (so it acts as a root of the graph and feedback through its own
+   output works, e.g. a toggle `wire q = dff(~q, c1)`).
+3. A wire that can never be calculated (e.g. `wire w1=~w2; wire w2=~w1`, or
+   through the *body* of a level-sensitive -- transparent -- block) is a
    combinational loop and reported as an error, e.g.
    `combinational loop: w1 -> w2 -> w1`.
 
-A **latch** is transparent (`E=1 -> Q=D` at the same timestamp, per the
-spec in `sample.txt`), so it is evaluated as part of step 2, reading only its
-own previous state; this differs cosmetically from simulation.md's step 1
-wording ("only needs the input value of the last timestamp"), which describes
-dff exactly. If you prefer the delayed variant, it is a one-line change in
-`Minisim.Sim` (`ILatch` case).
+At the end of each timestamp every always block's body is evaluated once
+(with all wires settled) and stored as its `t-1` sample.
 
 ### Components
 
@@ -172,15 +177,62 @@ c = `q[2]`, d = `q[1]`, e = `q[0]`; grab individual outputs with bit selects,
 or route them through local wires (outputs cannot be read inside the body).
 Each instantiation binds arguments to ports (widths must match; clocks and
 constants are visible inside bodies, wires are not -- pass them as ports).
-Recursive components are rejected. `dff`/`latch` are reserved built-ins
-available everywhere, one state element per instantiation site (also inside
-components, e.g. `def stage(D) -> Q: return dff(D, c1)`).
+Recursive components are rejected.
+
+### always blocks
+
+Sequential logic lives in `always` blocks, the replacement for the pre-0.2
+built-in `dff`/`latch` (`always` blocks are the only state elements -- there
+are no built-in components). An always block is the whole body of a
+single-output `def notrace` component; its own body may declare local wires
+and constants and must end in a single `return expr`:
+
+```python
+def notrace dff(D, CP) -> Q:      # == the pre-0.2 built-in dff
+	always(posedge CP):
+		return D
+
+def notrace latch(D, E) -> Q:     # == the pre-0.2 built-in latch
+	always(E):
+		return D
+
+def notrace async_neg_dff(D, CP, E) -> Q:   # comma = AND
+	always(negedge CP, posedge E):
+		wire w = E ? D : 0
+		return w
+```
+
+The sensitivity list is a comma-separated **AND** of items (`or` sensitivity
+is not supported; the block is active only when *every* item holds at the
+same timestamp). Each item is a 1-bit expression:
+
+* `posedge e` holds at `t` when `e` was `0` at `t-1` and is `1` at `t`;
+  `negedge e` when it was `1` and is `0`;
+* a plain `e` is level-sensitive: it holds while `e` is `1` at `t` (and an
+  `x` value makes the block's output `x`, since its transparency is unknown).
+
+When every item holds at `t` the block updates, otherwise it holds its
+previous value (the initial value is `x`):
+
+* **edge-triggered** (every item is `posedge`/`negedge`): the output becomes
+  the value the `return` expression had at `t-1`, exactly like a dff sampling
+  its data on a clock edge;
+* **transparent** (at least one plain item): the output becomes the value of
+  the `return` expression at `t` itself, like a latch that follows its input
+  while enabled.
+
+Because the block is the component's result, the usual component rules apply:
+one state element per instantiation, hierarchical internal names (its locals
+live under `instance.always.name`), and `notrace` keeps those internals out
+of the waveform -- which is also why always blocks are restricted to
+`def notrace` components: `--diagram` never has to draw one, they stay black
+boxes. `examples/dff.hdl` shows all of this.
 
 ### Instantiation and hierarchy
 
 A component can be instantiated with or without a name:
 
-```c
+```python
 Lut<12345> l1, l2          # statement: declares named instances
 def Lut<Num>(A,B,C,D) -> Y: ...
 wire out1 = l1(in1,in2,in3,in4)   # use a named instance (exactly once)
@@ -205,9 +257,10 @@ See `examples/lut.hdl` for all of this in one place,
 
 ## Adjustments to the original sample syntax
 
-* `def dff(...)` / `def latch(...)` header lines in `sample.txt` are
-  documentation of built-ins and are commented out (`dff`/`latch` are reserved
-  words that cannot be redefined).
+* The pre-0.2 built-in `dff`/`latch` are gone: sequential elements are
+  user-defined components with an `always` block (see "always blocks");
+  `dff`/`latch` are ordinary names now, and `always`, `posedge` and `negedge`
+  are reserved words.
 * Added the `sim N` statement to set the simulation length explicitly.
 * Single `0`/`1` are constants; only 2+ digit `0`/`1` runs are waveforms
   (otherwise `wire a = 1` would silently mean "one timestamp long").
@@ -243,14 +296,16 @@ to match the simulator's timestamps.
 * wires -- clocks, bit-sequence / value-list drivers and constant-driven
   wires -- are drawn as input pins and (notched) constant nodes and carry
   no `type`; literals used inside expressions appear as shared constant
-  nodes. Only components (expressions, `dff`/`latch`, instances) and `const`
-  declarations carry a `type`.
-* `dff`/`latch` calls are leaf nodes (`D`/`CP` or `D`/`E` in, `Q` out).
+  nodes. Only components (expressions, instances) and `const` declarations
+  carry a `type`.
 * each instantiation of a user-defined component is one node carrying the
   component's ports (and `Name=value` parameters); its internals — the
   body's gates, constants and nested instances — are drawn as children,
   recursively, **unless** the component is declared `def notrace`, in which
-  case it stays a black box. Clocks and top-level constants visible inside a
+  case it stays a black box. Since `always` blocks are only allowed in
+  `def notrace` components, sequential elements always stay black boxes
+  (an always block in a traced component is an error, like in the
+  simulator). Clocks and top-level constants visible inside a
   body are re-drawn as pins within each expanded instance (HDElk/ELK edges
   cannot cross hierarchy levels).
 * multi-bit connections are drawn as bus edges; a whole reference to a

@@ -5,6 +5,10 @@
 
 clk c1 1
 
+def notrace dff(D, CP) -> Q:
+	always(posedge CP):
+		return D
+
 def stage(D) -> Q:
 	return dff(D, c1)   # clocks are visible inside components
 

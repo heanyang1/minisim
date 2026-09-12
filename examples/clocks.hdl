@@ -3,6 +3,10 @@ clk c1 1
 clk c2 2
 clk c4 4
 
+def notrace dff(D, CP) -> Q:
+	always(posedge CP):
+		return D
+
 wire d = 0100100010001000
 
 wire q2 = dff(d, c2)          # sampled on rising edges of c2

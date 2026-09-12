@@ -39,14 +39,23 @@ wire and_A=100
 wire and_B=011
 wire and_out = and(and_A,B=and_B) # supports `port=wire` or just `wire`
 
-# Built-in component that should not be defined by the user
-# def dff(D,CP) -> Q:  (built-in; dff/latch cannot be redefined by the user)
+# Sequential elements are ordinary components whose body is a single `always`
+# block (only allowed in `def notrace` components; the block must be the
+# component's only result, ending in one `return`):
+def notrace dff(D,CP) -> Q:
 	# D flip-flop
 	# If CP is 0 at time `t` and 1 at time `t+1`, then Q's value at time `t+1` is the same as D's value at time `t`,
 	# otherwise Q keep its value at `t`
 	# The initial value is a special state `x`. `x` can't be assigned by the user.
+	always(posedge CP):
+		return D
 
-# def latch(D,E) -> Q:  (built-in)
+def notrace latch(D,E) -> Q:
 	# latch
 	# If E is 1, then Q=D, otherwise keep the previous value
 	# The initial value is `x`
+	always(E):
+		return D
+
+wire q = dff(w1, c1)
+wire r = latch(w1, w2[0])

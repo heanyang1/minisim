@@ -25,6 +25,9 @@ srcs =
       , "wire a = w & c1" ])
   , ("dff", unlines
       [ "clk c1 1"
+      , "def notrace dff(D, CP) -> Q:"
+      , "\talways(posedge CP):"
+      , "\t\treturn D"
       , "wire d = 1010"
       , "wire q = dff(d, c1)" ])
   , ("traced", unlines
@@ -37,6 +40,9 @@ srcs =
       , "wire y = f(x)" ])
   , ("stage", unlines
       [ "clk c1 1"
+      , "def notrace dff(D, CP) -> Q:"
+      , "\talways(posedge CP):"
+      , "\t\treturn D"
       , "def stage(D) -> Q: return dff(D, c1)"
       , "wire din = 1010"
       , "wire q0 = stage(din)" ])
@@ -89,6 +95,12 @@ srcs =
       [ "wire t = 11"
       , "def f(a) -> b: return a & t"
       , "wire y = f(t)" ])
+  , ("alwaystraced", unlines
+      [ "def f(D) -> Q:"
+      , "\talways(posedge D):"
+      , "\t\treturn D"
+      , "wire d = 1010"
+      , "wire y = f(d)" ])
   ]
 
 diagramTests :: Test
@@ -114,10 +126,11 @@ diagramTests = TestList
       lacks "pin" "\"type\""
   , "constants are constant nodes" ~:
       has "const" "\"constant\": 1"
-  , "dff is a leaf node" ~: do
+  , "dff (user-defined) is a black-box leaf node" ~: do
       has "dff" "\"type\": \"dff\""
       has "dff" "\"inPorts\": [\"D\", \"CP\"]"
       has "dff" "[\"c1\", \"q.CP\"]"
+      lacks "dff" "always"
   , "traced component internals are drawn" ~: do
       has "traced" "[\"y.a\", \"y$b.a\"]"
       has "traced" "[\"y$b.out\", \"y.b\"]"
@@ -151,6 +164,8 @@ diagramTests = TestList
       fails "recursive" "recursive"
   , "top wires are not visible inside components" ~:
       fails "notvisible" "not visible"
+  , "always in a traced component is an error" ~:
+      fails "alwaystraced" "always blocks are only allowed in 'def notrace' components"
   ]
  where
   renderOf k = case lookup k srcs of

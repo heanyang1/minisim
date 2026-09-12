@@ -1,7 +1,9 @@
 {-# LANGUAGE LambdaCase #-}
 -- | Elaboration: resolves names, checks widths, instantiates user components
 -- (named or anonymous, with parameters) and turns the AST into an executable
--- graph of 'IExpr' drivers.
+-- graph of 'IExpr' drivers.  Sequential logic is the @always@ block of a
+-- single-output @def notrace@ component, elaborated into one 'IAlways' node
+-- per instantiation.
 --
 -- A component body may declare local wires, constants and named instances of
 -- other components.  Locals of an instance are hoisted into the global wire
@@ -11,6 +13,7 @@
 -- @def notrace@) is kept in the design but hidden from the waveform.
 module Minisim.Elab
   ( IExpr(..)
+  , Sens(..)
   , Design(..)
   , elaborate
   ) where
@@ -38,16 +41,27 @@ data IExpr
   | IBin BOp IExpr IExpr
   | IMux Int IExpr IExpr IExpr -- ^ width, cond, a, b
   | ICat [IExpr]               -- ^ concatenation, little-endian part order
-  | IDff Int Int IExpr IExpr   -- ^ instance id, width, D, CP
-  | ILatch Int Int IExpr IExpr -- ^ instance id, width, D, E
+  | IAlways Int Int [Sens] Bool IExpr
+                              -- ^ always block: instance id, width,
+                              -- sensitivity list, has a level item
+                              -- (transparent) or only edges (triggered),
+                              -- and the 'return' expression
+  deriving (Eq, Show)
+
+-- | One sensitivity-list item of an always block (each 1 bit wide).
+data Sens
+  = SPos IExpr                -- ^ @posedge e@: holds when e goes 0 -> 1
+  | SNeg IExpr                -- ^ @negedge e@: holds when e goes 1 -> 0
+  | SLvl IExpr                -- ^ @e@: holds while e is 1 (an x makes the
+                              -- block's output x)
   deriving (Eq, Show)
 
 data Design = Design
   { dClocks  :: [(Name, Integer)]                -- ^ declaration order
   , dWires   :: [(Name, Int, Bool)]              -- ^ declaration order (name, width, traced)
   , dDrivers :: M.Map Name IExpr                 -- ^ one driver per wire
-  , dDffs    :: M.Map Int (Int, IExpr, IExpr)    -- ^ id -> (width, D, CP)
-  , dLatches :: M.Map Int (Int, IExpr, IExpr)    -- ^ id -> (width, D, E)
+  , dAlwayss :: M.Map Int (Int, [Sens], Bool, IExpr)
+                              -- ^ id -> (width, sensitivity, transparent, body)
   , dT       :: Int                              -- ^ number of timestamps
   , dWarn    :: [String]
   }
@@ -164,7 +178,7 @@ constVal = \case
              else if any (== BX) cv then replicate w BX
              else bv
   ICat es -> concat <$> mapM constVal es
-  _ -> Nothing   -- ISeq, IList, IClock, IWire, IDff, ILatch are not constants
+  _ -> Nothing   -- ISeq, IList, IClock, IWire, IAlways are not constants
 
 --------------------------------------------------------------------------------
 -- Expression elaboration
@@ -317,28 +331,6 @@ resolveW (WName n) = do
                     ++ " (parameters are only in scope inside a component body)")
 
 elabCall :: Name -> [Integer] -> [(Maybe Name, Expr)] -> E (IExpr, Int)
-elabCall "dff" ps args = do
-  unless (null ps) $ err "dff is a built-in and takes no parameters"
-  bound <- bindArgs "dff" ["D", "CP"] args
-  (de, dw) <- elabExpr Nothing (bound M.! "D")
-  when (dw < 1) $ err "dff data input must not be empty"
-  (ce, cw) <- elabExpr Nothing (bound M.! "CP")
-  unless (cw == 1) $ err "the CP input of dff must be 1 bit wide"
-  unless (clockOnly ce) $
-    err "the CP port of dff may only be a clock or an expression of clocks"
-  i <- freshId
-  return (IDff i dw de ce, dw)
-
-elabCall "latch" ps args = do
-  unless (null ps) $ err "latch is a built-in and takes no parameters"
-  bound <- bindArgs "latch" ["D", "E"] args
-  (de, dw) <- elabExpr Nothing (bound M.! "D")
-  when (dw < 1) $ err "latch data input must not be empty"
-  (ee, ew) <- elabExpr Nothing (bound M.! "E")
-  unless (ew == 1) $ err "the E input of latch must be 1 bit wide"
-  i <- freshId
-  return (ILatch i dw de ee, dw)
-
 elabCall n ps args = do
   s <- get
   case () of
@@ -431,19 +423,36 @@ instantiateBody prefix compName ps args = do
                       , esVisiting = S.insert compName (esVisiting st) }
   -- pass 1: declarations (wires, consts, instances)
   mapM_ bodyDecl (defBody def)
+  -- an always block (at most one) is the component's single result; it is
+  -- elaborated before the drivers so that its body may reference any local
+  mAlways <- elabAlwaysDef def
   -- pass 2: local drivers (may be in any order)
   mapM_ bodyDriver (defBody def)
   -- the result: one expression per output port; a multi-output call
   -- evaluates to their concatenation (first output = MSB)
-  results <- bodyResults def
-  res <- forM results $ \(on, mwd, e) -> do
-    mw <- traverse resolveW mwd
-    (ie, w) <- elabExpr mw e
-    forM_ mw $ \w' ->
-      unless (w == w') $
-        err ("width mismatch for output " ++ show on ++ " of " ++ show compName
-             ++ ": expected " ++ show w' ++ ", got " ++ show w)
-    return (ie, w)
+  res <- case mAlways of
+    Just (ae, w) -> do
+      case defOuts def of
+        [(on, mwd)] -> do
+          mw <- traverse resolveW mwd
+          forM_ mw $ \w' ->
+            unless (w == w') $
+              err ("width mismatch for output " ++ show on ++ " of "
+                   ++ show compName ++ ": expected " ++ show w'
+                   ++ ", got " ++ show w)
+          return [(ae, w)]
+        _ -> err ("component " ++ show compName
+                  ++ " with an always block must have a single output port")
+    Nothing -> do
+      results <- bodyResults def
+      forM results $ \(on, mwd, e) -> do
+        mw <- traverse resolveW mwd
+        (ie, w) <- elabExpr mw e
+        forM_ mw $ \w' ->
+          unless (w == w') $
+            err ("width mismatch for output " ++ show on ++ " of " ++ show compName
+                 ++ ": expected " ++ show w' ++ ", got " ++ show w)
+        return (ie, w)
   let r = case res of
         [(ie, w)] -> (ie, w)
         _ -> (ICat (reverse (map fst res)), sum (map snd res))
@@ -484,6 +493,69 @@ bodyResults def = do
                     ++ " is assigned more than once")
     _ -> err ("component " ++ show dn ++ " has more than one result statement")
 
+-- | Elaborate the (at most one) always block of a component body, if any.
+-- The block must be the component's only result statement; the sensitivity
+-- list and body may reference anything visible in the component (all locals
+-- are declared by then).  The block is a sub-scope that only extends the
+-- hierarchical prefix: the component's locals stay visible inside it, its
+-- own declarations are unwound afterwards (but their global wires stay in
+-- the design, and instances used by the block stay used).
+elabAlwaysDef :: Def -> E (Maybe (IExpr, Int))
+elabAlwaysDef def = case [s | s@(BAlways _ _) <- defBody def] of
+  [] -> return Nothing
+  [BAlways sens body] -> do
+    let dn = defName def
+    unless (defNoTrace def) $
+      err ("always blocks are only allowed in 'def notrace' components ("
+           ++ dn ++ ")")
+    when (any isResult (defBody def)) $
+      err ("the always block of " ++ show dn
+           ++ " must be its only result statement"
+           ++ " (remove 'return'/'out =' lines outside it)")
+    forM_ body $ \bs -> case bs of
+      BReturn{} -> return ()
+      BWire{} -> return ()
+      BWireInit{} -> return ()
+      BConst{} -> return ()
+      _ -> err ("only 'wire'/'const' declarations and one 'return' are allowed"
+                ++ " inside an always block (" ++ dn ++ ")")
+    conds <- forM sens $ \(me, e) -> do
+      (ie, w) <- elabExpr Nothing e
+      unless (w == 1) $
+        err ("a sensitivity item of " ++ show dn ++ " must be 1 bit wide")
+      return $ case me of
+        Just PosEdge -> SPos ie
+        Just NegEdge -> SNeg ie
+        Nothing -> SLvl ie
+    -- a sub-scope that only extends the hierarchical prefix
+    old <- get
+    let savedLocals = esLocals old
+        savedConsts = esLocalConsts old
+        savedInsts = esLocalInsts old
+    modify' $ \st -> st { esPrefix = esPrefix st ++ "always." }
+    mapM_ bodyDecl body
+    mapM_ bodyDriver body
+    e <- case [e | BReturn e <- body] of
+      [e] -> return e
+      [] -> err ("the always block of " ++ show dn
+                 ++ " must end in 'return expr'")
+      _ -> err ("the always block of " ++ show dn
+                ++ " has more than one 'return'")
+    (be, w) <- elabExpr Nothing e
+    modify' $ \st -> st { esPrefix = esPrefix old
+                        , esLocals = savedLocals, esLocalConsts = savedConsts
+                        , esLocalInsts = savedInsts }
+    i <- freshId
+    return (Just (IAlways i w conds (any isLvl conds) be, w))
+  _ -> err ("a component may contain at most one always block ("
+            ++ defName def ++ ")")
+ where
+  isResult (BReturn _) = True
+  isResult (BAssign _ _) = True
+  isResult _ = False
+  isLvl SLvl{} = True
+  isLvl _ = False
+
 -- | Pass 1 over a component body: register local declarations.
 bodyDecl :: BodyStmt -> E ()
 bodyDecl (BWire tr decls) = mapM_ (declLocalWire tr) decls
@@ -511,7 +583,7 @@ checkLocalFresh n = do
         || M.member n (esPorts s) || M.member n (esParams s)
         || M.member n (esClocks s)) $
     err ("duplicate local name " ++ show n ++ " in component "
-         ++ show (esInDef s))
+         ++ show (maybe "?" id (esInDef s)))
   case esInDef s of
     Just d | Just def <- M.lookup d (esDefs s)
            , n `elem` map fst (defOuts def) ->
@@ -578,17 +650,6 @@ withConstCtx m = do
   modify' $ \st -> st { esConstCtx = old }
   return r
 
--- | May this expression be used as a dff clock?
-clockOnly :: IExpr -> Bool
-clockOnly (IConstV _) = True
-clockOnly (IClock _) = True
-clockOnly (IUn _ e) = clockOnly e
-clockOnly (IBin _ a b) = clockOnly a && clockOnly b
-clockOnly (IMux _ c a b) = clockOnly c && clockOnly a && clockOnly b
-clockOnly (ISel e _) = clockOnly e
-clockOnly (IZExt e _) = clockOnly e
-clockOnly _ = False   -- IWire, ISeq, IList, ISelDyn, IDff, ILatch, ICat are not clocks
-
 --------------------------------------------------------------------------------
 -- Top level
 --------------------------------------------------------------------------------
@@ -615,15 +676,14 @@ elaborate (Program stmts) = do
       (driverPairs, warnss) =
         unzip (map finalize [(n, esWires st M.! n) | n <- esWireOrd st])
       drvMap = M.fromList driverPairs
-      (dffInsts, latchInsts) = collectInstances (M.elems drvMap)
+      alwInsts = collectInstances (M.elems drvMap)
   t <- simLength stmts
   return Design
     { dClocks = esClockOrd st
     , dWires = [ (n, esWires st M.! n, M.findWithDefault True n (esTrace st))
                | n <- esWireOrd st ]
     , dDrivers = drvMap
-    , dDffs = M.fromList dffInsts
-    , dLatches = M.fromList latchInsts
+    , dAlwayss = M.fromList alwInsts
     , dT = t
     , dWarn = reverse (esWarn st) ++ unusedWarns ++ concat warnss
     }
@@ -793,6 +853,8 @@ maxLiteralLength = maximum . (0 :) . concatMap stmtLens
   bodyLens (BAssign _ e) = exprLens e
   bodyLens (BWireInit _ _ _ rhs) = listLens rhs ++ concatMap exprLens rhs
   bodyLens (BConst _ _ _ e) = exprLens e
+  bodyLens (BAlways sens body) =
+    concatMap (exprLens . snd) sens ++ concatMap bodyLens body
   bodyLens (BWire _ _) = []
   bodyLens (BInst _ _ _) = []
   exprLens (ESeq bs) = [length bs]
@@ -826,12 +888,15 @@ simLength stmts =
 -- Instance collection
 --------------------------------------------------------------------------------
 
-collectInstances :: [IExpr] -> ([(Int, (Int, IExpr, IExpr))], [(Int, (Int, IExpr, IExpr))])
+-- | Collect the always blocks reachable from the drivers (one instance per
+-- elaboration site; nested expressions are walked too).
+collectInstances :: [IExpr] -> [(Int, (Int, [Sens], Bool, IExpr))]
 collectInstances = foldMap go
  where
-  go :: IExpr -> ([(Int, (Int, IExpr, IExpr))], [(Int, (Int, IExpr, IExpr))])
-  go (IDff i w d c) = ([(i, (w, d, c))], []) <> go d <> go c
-  go (ILatch i w d e) = ([], [(i, (w, d, e))]) <> go d <> go e
+  go :: IExpr -> [(Int, (Int, [Sens], Bool, IExpr))]
+  go (IAlways i w conds lvl body) =
+    [(i, (w, conds, lvl, body))]
+    <> foldMap (go . sensE) conds <> go body
   go (IConstV _) = mempty
   go (IList _ _) = mempty
   go (ISeq _) = mempty
@@ -844,3 +909,8 @@ collectInstances = foldMap go
   go (IBin _ a b) = go a <> go b
   go (IMux _ c a b) = go c <> go a <> go b
   go (ICat es) = foldMap go es
+
+sensE :: Sens -> IExpr
+sensE (SPos e) = e
+sensE (SNeg e) = e
+sensE (SLvl e) = e

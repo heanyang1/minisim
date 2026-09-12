@@ -9,6 +9,7 @@ module Minisim.Ast
   , Width(..)
   , Expr(..)
   , BodyStmt(..)
+  , Edge(..)
   , Def(..)
   , Stmt(..)
   , Program(..)
@@ -76,6 +77,10 @@ data Expr
                              -- optional parameters @\<p1, p2\>@, positional or @port=expr@ args
   deriving (Eq, Show)
 
+-- | An edge qualifier in an @always@ sensitivity list.
+data Edge = PosEdge | NegEdge
+  deriving (Eq, Show)
+
 -- | A statement inside a component body.
 data BodyStmt
   = BReturn Expr             -- ^ @return expr@
@@ -84,6 +89,10 @@ data BodyStmt
   | BWireInit Bool Name Width [Expr] -- ^ @wire [notrace] a[n] = rhs@
   | BConst Bool (Maybe Width) Name Expr -- ^ @const [notrace] a[n] = const-expr@
   | BInst Name [Integer] [Name]    -- ^ @Comp<params> i1, i2, ...@: named instances
+  | BAlways [(Maybe Edge, Expr)] [BodyStmt]
+                             -- ^ @always(sens, ...): body@ -- sensitivity items
+                             -- ('Nothing' = level sensitive) and the block
+                             -- body, which ends in a single 'return'
   deriving (Eq, Show)
 
 data Def = Def
@@ -117,4 +126,4 @@ newtype Program = Program { progStmts :: [Stmt] }
 reservedWords :: [String]
 reservedWords =
   [ "clk", "wire", "const", "assign", "def", "sim", "return"
-  , "dff", "latch", "notrace" ]
+  , "always", "posedge", "negedge", "notrace" ]

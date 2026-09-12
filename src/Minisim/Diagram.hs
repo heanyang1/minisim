@@ -8,12 +8,12 @@
 --   with inputs @b, c, d@ and output @a@ (the RHS expression is its type);
 -- * wires -- clocks, bit-sequence\/value-list drivers and constant-driven
 --   wires -- are drawn as input pins\/constant nodes and carry no @type@;
---   only components (expressions, @dff@\/@latch@, instances) and const
---   declarations do;
--- * @dff@\/@latch@ calls are leaf nodes (@D@\/@CP@ or @D@\/@E@ in, @Q@ out);
+--   only components (expressions, instances) and const declarations do;
 -- * each instantiation of a user-defined component is one node with the
 --   component's ports; its internals are drawn as children unless the
 --   component is declared @def notrace@ (then it stays a black box).
+--   Sequential logic lives in @always@ blocks, which are only allowed in
+--   @def notrace@ components, so it always stays hidden in black boxes.
 --   Clocks and top-level constants visible inside a body are re-drawn as
 --   pins inside each expanded instance, because HDElk\/ELK edges cannot
 --   cross hierarchy levels.  Children of an instance carry hierarchical
@@ -530,18 +530,15 @@ pickBit srcs i
 mkInstance :: Maybe String -> Name -> [Integer] -> [(Maybe Name, Expr)] -> D [Src]
 mkInstance pref callName ps args = do
   sc <- getScope
-  case callName of
-    "dff" -> builtin "dff" ["D", "CP"]
-    "latch" -> builtin "latch" ["D", "E"]
-    _ -> case M.lookup callName (scInsts sc) of
-      Just (comp, dps) -> do
-        unless (null ps) $
-          err ("instance " ++ show callName
-               ++ " was declared with its parameters; remove the <...> in the call")
-        user comp dps (Just callName)
-      Nothing -> do
-        st <- get
-        case M.lookup callName (dsDefs st) of
+  case M.lookup callName (scInsts sc) of
+    Just (comp, dps) -> do
+      unless (null ps) $
+        err ("instance " ++ show callName
+             ++ " was declared with its parameters; remove the <...> in the call")
+      user comp dps (Just callName)
+    Nothing -> do
+      st <- get
+      case M.lookup callName (dsDefs st) of
           Nothing -> case scInDef sc of
             Just d | S.member callName (dsTopInsts st) ->
               err ("instance " ++ show callName ++ " is not visible inside component "
@@ -554,19 +551,6 @@ mkInstance pref callName ps args = do
                    ++ show (length ps))
             user callName ps pref
  where
-  builtin nm ports = do
-    bound <- bindArgs nm ports args
-    sc <- getScope
-    nodeId <- addChild (boxName (scBox sc) (fromMaybe nm pref)) (fromMaybe nm pref)
-      [ ("type", JStr nm)
-      , ("inPorts", JArr (map JStr ports))
-      , ("outPorts", JArr [JStr "Q"]) ]
-    forM_ ports $ \p -> forM_ (M.lookup p bound) $ \e ->
-      connectExpr e (nodeId ++ "." ++ p)
-    wq <- case M.lookup "D" bound of
-      Just de -> exprWidthCur de
-      Nothing -> return Nothing
-    return [Src nodeId (Just "Q") wq]
   user comp dps mPref = do
     defs <- gets dsDefs
     let def = defs M.! comp
@@ -657,6 +641,8 @@ bodyDecl (BConst _ _ n e) = do
     [("constant", JInt 1), ("type", JStr (renderExpr pm e))]
   setDriver n Nothing [Src nid Nothing Nothing]
 bodyDecl (BInst comp ps is) = mapM_ (declInst comp ps) is
+bodyDecl (BAlways _ _) =
+  err "always blocks are only allowed in 'def notrace' components"
 bodyDecl _ = return ()
 
 bodyBuild :: BodyStmt -> D ()
@@ -687,11 +673,6 @@ resolveWidth pm (WName n) = case M.lookup n pm of
   Just _ -> Left ("parameter " ++ show n ++ ": bad width")
   Nothing -> Left ("width " ++ show n
                    ++ " is not a parameter (parameters are only in scope inside a component body)")
-
-exprWidthCur :: Expr -> D (Maybe Int)
-exprWidthCur e = do
-  sc <- getScope
-  return (exprWidth (scWidths sc) (scParams sc) e)
 
 -- | Best-effort width of an expression (calls are unknown).
 exprWidth :: M.Map Name Int -> M.Map Name Integer -> Expr -> Maybe Int

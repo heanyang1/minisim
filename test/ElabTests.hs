@@ -8,7 +8,7 @@ import Test.HUnit
 import Minisim.Ast (Bit(..), BOp(..), UOp(..))
 import Minisim.Elab
 
-import Support (okD, expectLeft)
+import Support (dffLib, expectLeft, okD)
 
 elabTests :: Test
 elabTests = TestList
@@ -259,23 +259,131 @@ elabTests = TestList
       expectLeft "out of range"
         "wire w[2] = 1, 2\nwire y = w[0x4]"
 
-    -- instances
-  , "dff instance counted" ~: do
-      d <- okD "sim 4\nclk c1 1\nwire q = dff(0, c1)"
-      M.size (dDffs d) @?= 1
-      M.size (dLatches d) @?= 0
+    -- instances (always blocks)
+  , "always instance counted" ~: do
+      d <- okD (dffLib ++ unlines
+        [ "sim 4", "clk c1 1", "def notrace q2(D) -> Q:"
+        , "\talways(posedge c1):", "\t\treturn D"
+        , "wire a = dff(0, c1)", "wire q = q2(a)" ])
+      M.size (dAlwayss d) @?= 2   -- one in dffLib's dff, one in q2
   , "one instance per call site" ~: do
-      d <- okD "sim 4\nclk c1 1\nwire a = dff(0, c1)\nwire b = dff(a, c1)"
-      M.size (dDffs d) @?= 2
-  , "latch instance counted" ~: do
-      d <- okD "sim 4\nwire q = latch(0, 1)"
-      M.size (dLatches d) @?= 1
-      M.size (dDffs d) @?= 0
-  , "CP may be an expression of clocks" ~: do
-      d <- okD "sim 4\nclk c1 1\nclk c2 2\nwire q = dff(0, c1|c2)"
-      M.size (dDffs d) @?= 1
-  , "CP may be a negated clock" ~:
-      okD "sim 4\nclk c1 1\nwire q = dff(0, ~c1)" >> return ()
+      d <- okD (dffLib ++ unlines
+        [ "sim 4", "clk c1 1"
+        , "wire a = dff(0, c1)", "wire b = dff(a, c1)" ])
+      M.size (dAlwayss d) @?= 2
+  , "always driver reaches the wire" ~: do
+      d <- okD (unlines
+        [ "sim 4", "clk c1 1", "wire d = 1010"
+        , "def notrace f(D, CP) -> Q:"
+        , "\talways(posedge CP):"
+        , "\t\treturn D"
+        , "wire q = f(d, c1)" ])
+      dDrivers d M.! "q" @?= IAlways 0 1 [SPos (IClock 1)] False (IWire "d")
+      M.size (dAlwayss d) @?= 1
+  , "always: a level item makes the block transparent" ~: do
+      d <- okD (unlines
+        [ "sim 4", "wire e = 1010"
+        , "def notrace f(D, E) -> Q:"
+        , "\talways(E):"
+        , "\t\treturn D"
+        , "wire q = f(e, e)" ])
+      dDrivers d M.! "q" @=? IAlways 0 1 [SLvl (IWire "e")] True (IWire "e")
+  , "always: locals are hoisted under an always. prefix" ~: do
+      d <- okD (unlines
+        [ "sim 4", "clk c1 1", "wire d = 1010"
+        , "def notrace f(D, CP) -> Q:"
+        , "\talways(posedge CP):"
+        , "\t\twire w = D & 1"
+        , "\t\treturn w"
+        , "wire q = f(d, c1)" ])
+      dDrivers d M.! "f$1.always.w" @?= IBin OpAnd (IWire "d") (IConstV [B1])
+      lookup3 "f$1.always.w" (dWires d) @?= Just (1, False)   -- hidden
+  , "always: component locals stay visible inside the block" ~: do
+      d <- okD (unlines
+        [ "sim 4", "clk c1 1", "wire d = 1010"
+        , "def notrace f(D, CP) -> Q:"
+        , "\talways(posedge CP):"
+        , "\t\treturn D | g"        -- g is declared *after* the block
+        , "\twire g = 1"
+        , "wire q = f(d, c1)" ])
+      dDrivers d M.! "f$1.g" @?= IConstV [B1]
+  , "err: an always local is invisible outside the block" ~:
+      expectLeft "not visible inside component" (unlines
+        [ "sim 4", "clk c1 1", "wire d = 1010"
+        , "def notrace f(D, CP) -> Q:"
+        , "\talways(posedge CP):"
+        , "\t\twire w = D"
+        , "\t\treturn w"
+        , "\twire z = w"
+        , "wire q = f(d, c1)" ])
+  , "err: always local clashes with a component local" ~:
+      expectLeft "duplicate local name" (unlines
+        [ "sim 4", "clk c1 1", "wire d = 1010"
+        , "def notrace f(D, CP) -> Q:"
+        , "\twire w = D"
+        , "\talways(posedge CP):"
+        , "\t\twire w = ~D"
+        , "\t\treturn w"
+        , "wire q = f(d, c1)" ])
+  , "always: sensitivity may be an expression of clocks" ~:
+      okD (unlines
+        [ "sim 4", "clk c1 1", "clk c2 2", "wire d = 1010"
+        , "def notrace f(D, CP) -> Q:"
+        , "\talways(posedge CP):"
+        , "\t\treturn D"
+        , "wire q = f(d, c1|c2)" ]) >> return ()
+  , "err: always outside a notrace component" ~:
+      expectLeft "only allowed in 'def notrace'" (unlines
+        [ "sim 4", "wire d = 1010"
+        , "def f(D, CP) -> Q:"
+        , "\talways(posedge CP):"
+        , "\t\treturn D"
+        , "wire q = f(d, 1)" ])
+  , "err: sensitivity item wider than 1" ~:
+      expectLeft "must be 1 bit wide" (unlines
+        [ "sim 4", "wire d = 1010"
+        , "def notrace f(D) -> Q:"
+        , "\talways(posedge {D, D}):"
+        , "\t\treturn D"
+        , "wire q = f(d)" ])
+  , "err: always mixed with another result" ~:
+      expectLeft "only result statement" (unlines
+        [ "sim 4", "wire d = 1010"
+        , "def notrace f(D, CP) -> Q:"
+        , "\talways(posedge CP):"
+        , "\t\treturn D"
+        , "\tQ = 1"
+        , "wire q = f(d, 1)" ])
+  , "err: two always blocks" ~:
+      expectLeft "at most one always block" (unlines
+        [ "sim 4", "wire d = 1010"
+        , "def notrace f(D, CP) -> Q:"
+        , "\talways(posedge CP):"
+        , "\t\treturn D"
+        , "\talways(negedge CP):"
+        , "\t\treturn D"
+        , "wire q = f(d, 1)" ])
+  , "err: always in a multi-output component" ~:
+      expectLeft "single output" (unlines
+        [ "sim 4", "wire d = 1010"
+        , "def notrace f(D, CP) -> Q, R:"
+        , "\talways(posedge CP):"
+        , "\t\treturn D"
+        , "wire q[2] = f(d, 1)" ])
+  , "err: always output width mismatch" ~:
+      expectLeft "width mismatch for output" (unlines
+        [ "sim 4", "wire d = 1010"
+        , "def notrace f(D, CP) -> Q[2]:"
+        , "\talways(posedge CP):"
+        , "\t\treturn D"
+        , "wire q = f(d, 1)" ])
+  , "err: recursive component through an always body" ~:
+      expectLeft "recursive" (unlines
+        [ "sim 4", "wire d = 1010"
+        , "def notrace f(D, CP) -> Q:"
+        , "\talways(posedge CP):"
+        , "\t\treturn f(D, CP)"
+        , "wire q = f(d, 1)" ])
 
     -- errors
   , "err: width mismatch" ~:
@@ -304,15 +412,6 @@ elabTests = TestList
         , "\treturn inner(A)"
         , "wire a = 1010"
         , "wire y = f(a)" ])
-  , "err: dff CP is a data wire" ~:
-      expectLeft "expression of clocks" "sim 4\nwire d\nwire q = dff(0, d)"
-  , "err: dff CP is a sequence" ~:
-      expectLeft "expression of clocks" "sim 4\nwire q = dff(0, 1010)"
-  , "err: dff CP is an instance output" ~:
-      expectLeft "expression of clocks" (unlines
-        [ "def f(A) -> Y: return A"
-        , "wire d = 1010"
-        , "wire q = dff(0, f(d))" ])
   , "err: missing port" ~:
       expectLeft "not connected" "sim 4\ndef f(A,B) -> Y: return A\nwire w = f(1)"
   , "err: too many positional args" ~:

@@ -5,6 +5,7 @@ module Support
   , simulate
   , bitsOf, valsOf
   , bstr
+  , dffLib, latchLib, seqLib
   ) where
 
 import Data.List (isInfixOf)
@@ -73,6 +74,25 @@ expectSimLeft frag src =
 --------------------------------------------------------------------------------
 -- Result accessors
 --------------------------------------------------------------------------------
+
+-- | The user-defined replacement of the pre-0.2 built-in dff, prepended to
+-- test sources that need sequential logic.
+dffLib :: String
+dffLib = unlines
+  [ "def notrace dff(D, CP) -> Q:"
+  , "\talways(posedge CP):"
+  , "\t\treturn D" ]
+
+-- | The user-defined replacement of the pre-0.2 built-in latch.
+latchLib :: String
+latchLib = unlines
+  [ "def notrace latch(D, E) -> Q:"
+  , "\talways(E):"
+  , "\t\treturn D" ]
+
+-- | Both sequential elements.
+seqLib :: String
+seqLib = dffLib ++ latchLib
 
 bitChar :: Bit -> Char
 bitChar B0 = '0'

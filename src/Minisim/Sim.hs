@@ -1,18 +1,24 @@
 -- | Event simulation.
 --
--- Implements the algorithm from @simulation.md@: for each timestamp @t@,
+-- For each timestamp @t@, every wire is computed in dependency order: the
+-- driver graph is evaluated as a memoized depth-first search, so a wire is
+-- calculated once all its predecessors are (step 2 of @simulation.md@);
+-- a wire that can never be calculated is a combinational loop and an error.
 --
---   1. compute every dff output first (a dff only needs input values from
---      timestamp @t-1@; its CP input is an expression of clocks, whose value
---      is a pure function of @t@),
---   2. compute the remaining wires in dependency order (the graph is split
---      into trees rooted at dff outputs; a wire is calculated once all its
---      predecessors are),
---   3. raise an error if a wire cannot be calculated (combinational loop).
+-- An always block is the sequential element.  When the search first reaches
+-- one it reads only its own state from @t-1@ and its sensitivity list at
+-- @t@:
 --
--- A latch is transparent: while @E=1@ its output follows @D@ in the same
--- timestamp, so it is evaluated as part of step 2, reading only its own
--- state from @t-1@.
+--   * an edge-triggered block (only posedge\/negedge items) updates its
+--     output with the value its body had at @t-1@ when every item holds
+--     (a dff: the body is not evaluated at @t@ at all, so feedback through
+--     the block's own output works);
+--   * a level-sensitive block (at least one plain item) is transparent
+--     while every item holds and evaluates its body with the current
+--     values (a latch); a level item that is x makes the output x.
+--
+-- At the end of the timestamp each block's body is evaluated once (with all
+-- wires settled) and stored as the @t-1@ sample for the next step.
 --
 -- The wire list includes the (hierarchically named) local wires hoisted out
 -- of component instantiations; wires declared @notrace@ -- as well as every
@@ -30,7 +36,7 @@ import qualified Data.Set as S
 import Data.List (intercalate)
 
 import Minisim.Ast
-import Minisim.Elab (Design(..), IExpr(..))
+import Minisim.Elab (Design(..), IExpr(..), Sens(..))
 
 data SimResult = SimResult
   { srT      :: Int                       -- ^ number of timestamps
@@ -39,8 +45,9 @@ data SimResult = SimResult
   , srHist   :: M.Map Name [[Bit]]        -- ^ wire -> value at t = 1..T
   }
 
--- | dff state: (prevD, prevQ, prevCP, curQ)
-data DffSt = DffSt [Bit] [Bit] [Bit] [Bit]
+-- | always-block state: the sensitivity values, the body value and the
+-- output, all from timestamp @t-1@.
+data AlwSt = AlwSt [[Bit]] [Bit] [Bit]
 
 data SState = SState
   { stDesign :: Design
@@ -48,8 +55,7 @@ data SState = SState
   , stMemo   :: M.Map Name [Bit]   -- ^ values computed for the current timestamp
   , stGrey   :: S.Set Name         -- ^ wires currently being evaluated
   , stPath   :: [Name]             -- ^ evaluation stack (most recent first)
-  , stDff    :: M.Map Int DffSt
-  , stLatch  :: M.Map Int [Bit]    -- ^ latch Q at t-1
+  , stAlways :: M.Map Int AlwSt
   , stHist   :: M.Map Name [[Bit]] -- ^ history, newest first
   }
 
@@ -58,14 +64,12 @@ type S a = StateT SState (Either String) a
 -- | Run the simulation for timestamps 1..T.
 runSim :: Design -> Either String SimResult
 runSim design = do
-  let dff0 = M.fromList
-        [ (i, DffSt (replicate w BX) (replicate w BX) [B0] (replicate w BX))
-        | (i, (w, _, _)) <- M.toList (dDffs design) ]
-      latch0 = M.fromList
-        [ (i, replicate w BX) | (i, (w, _, _)) <- M.toList (dLatches design) ]
+  let alw0 = M.fromList
+        [ (i, AlwSt (map (const [B0]) conds) (replicate w BX) (replicate w BX))
+        | (i, (w, conds, _, _)) <- M.toList (dAlwayss design) ]
       s0 = SState
         { stDesign = design, stNow = 0, stMemo = M.empty, stGrey = S.empty
-        , stPath = [], stDff = dff0, stLatch = latch0, stHist = M.empty }
+        , stPath = [], stAlways = alw0, stHist = M.empty }
   (_, s) <- runStateT (forM_ [1 .. dT design] simStep) s0
   return SimResult
     { srT = dT design
@@ -76,19 +80,8 @@ runSim design = do
 simStep :: Int -> S ()
 simStep t = do
   modify' $ \s -> s { stNow = t, stMemo = M.empty, stGrey = S.empty, stPath = [] }
-  dffs <- gets (dDffs . stDesign)
-  -- (1) dff outputs: only need t-1 inputs and the clock value at t
-  forM_ (M.toList dffs) $ \(i, (w, _, ce)) ->
-    if t == 1
-      then setDffCurQ i (replicate w BX)   -- initial value: x
-      else do
-        st <- gets stDff
-        case M.findWithDefault (DffSt [] [] [] []) i st of
-          DffSt pD pQ pCP _ -> do
-            cpv <- evalIExpr ce              -- clock expression: no wire deps
-            let edge = pCP == [B0] && cpv == [B1]
-            setDffCurQ i (if edge then pD else pQ)
-  -- (2) all remaining wires, in dependency order
+  -- (1) every wire in dependency order; an always block is evaluated when
+  -- the search reaches it, reading only its own state from t-1
   wires <- gets (dWires . stDesign)
   forM_ wires $ \(n, _, _) -> () <$ evalWire n
   -- record history
@@ -97,23 +90,21 @@ simStep t = do
     case M.lookup n memo of
       Just v -> modify' $ \s -> s { stHist = M.insertWith (++) n [v] (stHist s) }
       Nothing -> return ()
-  -- (3) remember inputs for the next timestamp
-  forM_ (M.toList dffs) $ \(i, (_, de, ce)) -> do
-    dv <- evalIExpr de
-    cpv <- evalIExpr ce
-    let curQ s = case M.findWithDefault (DffSt [] [] [] []) i (stDff s) of
-                   DffSt _ _ _ q -> q
-    q <- gets curQ
-    modify' $ \s -> s
-      { stDff = M.insert i (DffSt dv q cpv q) (stDff s) }
-  latches <- gets (dLatches . stDesign)
-  forM_ (M.toList latches) $ \(i, (w, de, ee)) -> do
-    q <- evalIExpr (ILatch i w de ee)
-    modify' $ \s -> s { stLatch = M.insert i q (stLatch s) }
+  -- (2) remember inputs for the next timestamp: the body value becomes the
+  -- t-1 sample of an edge-triggered block (a level-sensitive block reads
+  -- its body live and ignores the stored one)
+  alws <- gets (dAlwayss . stDesign)
+  forM_ (M.toList alws) $ \(i, (w, conds, lvl, body)) -> do
+    q <- evalIExpr (IAlways i w conds lvl body)
+    cvs <- mapM (evalIExpr . sensExpr) conds
+    bv <- evalIExpr body
+    modify' $ \s ->
+      s { stAlways = M.insert i (AlwSt cvs bv q) (stAlways s) }
 
-setDffCurQ :: Int -> [Bit] -> S ()
-setDffCurQ i q = modify' $ \s ->
-  s { stDff = M.adjust (\(DffSt a b c _) -> DffSt a b c q) i (stDff s) }
+sensExpr :: Sens -> IExpr
+sensExpr (SPos e) = e
+sensExpr (SNeg e) = e
+sensExpr (SLvl e) = e
 
 --------------------------------------------------------------------------------
 -- Evaluation
@@ -147,6 +138,14 @@ bitsIndex bs
       (sum [vi b * 2 ^ i | (i, b) <- zip [0 :: Integer ..] bs]))
  where vi B1 = 1 :: Integer
        vi _ = 0
+
+-- | Does one sensitivity item hold at t?  @p@ is the item's value at t-1,
+-- @c@ its value at t.
+condHolds :: [Bit] -> Sens -> [Bit] -> Bool
+condHolds p s c = case s of
+  SPos _ -> p == [B0] && c == [B1]
+  SNeg _ -> p == [B1] && c == [B0]
+  SLvl _ -> c == [B1]
 
 -- | Evaluate an elaborated expression for the current timestamp.
 evalIExpr :: IExpr -> S [Bit]
@@ -186,15 +185,16 @@ evalIExpr e = case e of
     else if any (== BX) cv then return (replicate w BX)
     else evalIExpr be
   ICat es -> concat <$> mapM evalIExpr es
-  IDff i _ _ _ -> do
-    m <- gets stDff
-    case M.findWithDefault (DffSt [] [] [] []) i m of
-      DffSt _ _ _ q -> return q
-  ILatch i w de ee -> do
-    ev <- evalIExpr ee
-    case ev of
-      [B1] -> evalIExpr de                  -- transparent
-      [B0] -> do
-        m <- gets stLatch
-        return (M.findWithDefault (replicate w BX) i m)
-      _ -> return (replicate w BX)          -- x enable -> x
+  IAlways i w conds lvl body -> do
+    m <- gets stAlways
+    let AlwSt ps pb pq = M.findWithDefault (AlwSt [] [] []) i m
+    cvs <- mapM (evalIExpr . sensExpr) conds
+    -- a level item whose value is x makes the transparency unknown -> x
+    if any (\(s, v) -> case s of SLvl _ -> v == [BX]; _ -> False)
+           (zip conds cvs)
+      then return (replicate w BX)
+      else do
+        let holds = and [condHolds p s c | (s, p, c) <- zip3 conds ps cvs]
+        if holds
+          then if lvl then evalIExpr body else return pb
+          else return pq

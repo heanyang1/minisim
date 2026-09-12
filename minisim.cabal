@@ -4,7 +4,7 @@ version:            0.2.0.0
 synopsis:           A tiny HDL simulator producing WaveDrom JSON
 description:
   minisim parses a small Verilog-flavoured HDL (clocks, wires, bit
-  selects, user components, built-in dff/latch), simulates it for a
+  selects, user components, always blocks), simulates it for a
   number of timestamps and emits a WaveDrom JSON timing diagram.
   A companion Python script (wavedrom2svg.py) renders the JSON to SVG.
 category:           Hardware

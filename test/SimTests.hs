@@ -5,7 +5,7 @@ import Test.HUnit
 
 import Minisim.Sim (SimResult(..))
 
-import Support (bitsOf, expectSimLeft, simulate, valsOf)
+import Support (bitsOf, dffLib, expectSimLeft, latchLib, simulate, valsOf)
 
 simTests :: Test
 simTests = TestList
@@ -79,33 +79,81 @@ simTests = TestList
       , "wire a = 1"
       , "wire z[4] = w & a" ]) "z" ["0001", "0001"]
 
-    -- dff
-  , "dff samples on rising edges, initial x" ~: sim1 (unlines
+    -- dff (the user-defined component from dffLib, equal to the old built-in)
+  , "dff samples on rising edges, initial x" ~: sim1 (dffLib ++ unlines
       [ "sim 8", "clk c1 1", "wire d = 11001010", "wire q = dff(d, c1)" ])
       "q" "xx110000"
-  , "dff on a divided clock" ~: sim1 (unlines
+  , "dff on a divided clock" ~: sim1 (dffLib ++ unlines
       [ "sim 8", "clk c2 2", "wire d = 01001000", "wire q = dff(d, c2)" ])
       "q" "xxxx0000"
-  , "dff with named arguments" ~: sim1 (unlines
+  , "dff with named arguments" ~: sim1 (dffLib ++ unlines
       [ "sim 6", "clk c1 1", "wire d = 110011", "wire q = dff(D=d, CP=c1)" ])
       "q" "xx1100"
   , "bus dff" ~: simV (unlines
-      [ "sim 4", "clk c1 1", "wire d[4] = 1, 2, 4, 8", "wire q[4] = dff(d, c1)" ])
+      [ "sim 4", "clk c1 1"
+      , "def notrace dff4(D[4], CP) -> Q:"
+      , "\talways(posedge CP):"
+      , "\t\treturn D"
+      , "wire d[4] = 1, 2, 4, 8", "wire q[4] = dff4(d, c1)" ])
       "q" ["xxxx", "xxxx", "0010", "0010"]
-  , "feedback through dff (toggle after x resolves)" ~: sim1 (unlines
+  , "feedback through dff (toggle after x resolves)" ~: sim1 (dffLib ++ unlines
       [ "sim 8", "clk c1 1", "wire en = 10111111", "wire q = dff(~q & en, c1)" ])
       "q" "xx001100"
 
-    -- latch
-  , "latch is transparent while E=1" ~: sim1 (unlines
+    -- latch (the user-defined component from latchLib)
+  , "latch is transparent while E=1" ~: sim1 (latchLib ++ unlines
       [ "sim 6", "wire d = 011110", "wire e = 111001", "wire q = latch(d, e)" ])
       "q" "011110"
-  , "latch holds through E=0 gaps" ~: sim1 (unlines
+  , "latch holds through E=0 gaps" ~: sim1 (latchLib ++ unlines
       [ "sim 6", "wire d = 010101", "wire e = 110011", "wire q = latch(d, e)" ])
       "q" "011101"
-  , "latch with x enable gives x" ~: sim1 (unlines
+  , "latch with x enable gives x" ~: sim1 (latchLib ++ unlines
       [ "sim 2", "wire d = 11", "wire u", "wire q = latch(D=d, E=u)" ])
       "q" "xx"
+
+    -- always blocks (beyond the dff/latch shapes above)
+  , "always: negedge samples on falling edges" ~: sim1 (unlines
+      [ "sim 8", "clk c1 1"
+      , "def notrace ndff(D, CP) -> Q:"
+      , "\talways(negedge CP):"
+      , "\t\treturn D"
+      , "wire d = 11001010", "wire q = ndff(d, c1)" ])
+      "q" "x1100111"
+  , "always: comma is AND (every item must hold)" ~: sim1 (unlines
+      [ "sim 8", "clk c1 1", "clk c2 2"
+      , "def notrace f(D, A, B) -> Q:"
+      , "\talways(posedge A, posedge B):"
+      , "\t\treturn D"
+      , "wire d = 11001010", "wire q = f(d, c1, c2)" ])
+      "q" "xxxx0000"   -- both edges only at t=1 (loads x) and t=5 (loads d4=0)
+  , "always: a level item makes the block transparent" ~: sim1 (unlines
+      [ "sim 8", "clk c1 1"
+      , "def notrace m(D, CP, en) -> Q:"
+      , "\talways(posedge CP, en):"
+      , "\t\treturn D"
+      , "wire d = 01011010", "wire en = 10111000", "wire q = m(d, c1, en)" ])
+      "q" "00001111"   -- body at t on clocked timestamps while en=1
+  , "always: edge item on an x signal never triggers" ~: sim1 (unlines
+      [ "sim 4"
+      , "def notrace f(D, S) -> Q:"
+      , "\talways(posedge S):"
+      , "\t\treturn D"
+      , "wire d = 1010", "wire u", "wire q = f(d, u)" ])
+      "q" "xxxx"
+  , "always: local wires are simulated (but hidden by notrace)" ~:
+      case simulate (unlines
+        [ "sim 4", "clk c1 1"
+        , "def notrace f(D, CP) -> Q:"
+        , "\talways(posedge CP):"
+        , "\t\twire w = D & 1"
+        , "\t\treturn w"
+        , "wire d = 1010", "wire q = f(d, c1)" ]) of
+        Left e -> assertFailure ("simulation failed: " ++ e)
+        Right sr -> do
+          bitsOf sr "q" @?= "xx00"      -- q3 = w2 = d2 & 1 = 0
+          bitsOf sr "f$1.always.w" @?= "1010"
+          assertBool "f$1.always.w must not be traced"
+            (not (any (\(n, _, t) -> t && n == "f$1.always.w") (srWires sr)))
 
     -- components
   , "component with named args" ~: sim1 (unlines
@@ -114,7 +162,7 @@ simTests = TestList
   , "nested components" ~: sim1 (unlines
       [ "sim 2", "def n(A) -> Y: return ~A", "def m(A) -> Y: return n(A)|0"
       , "wire o = m(01)" ]) "o" "10"
-  , "dff inside a component" ~: sim1 (unlines
+  , "dff inside a component" ~: sim1 (dffLib ++ unlines
       [ "sim 8", "clk c1 1"
       , "def stage(D) -> Y:", "\treturn dff(D, c1)"
       , "wire din = 11001010", "wire q = stage(din)" ]) "q" "xx110000"
@@ -231,7 +279,7 @@ simTests = TestList
           -- the value is still simulated and kept in the history
           bitsOf sr "f$1.t" @?= "11001010"
   , "named instances hold independent state" ~:
-      case simulate (unlines
+      case simulate (dffLib ++ unlines
         [ "clk c1 1"
         , "def stage(D) -> Y:"
         , "\twire q = dff(D, c1)"

@@ -204,6 +204,62 @@ parserTests = TestList
         (Program [SWireInit False "r" (WConst 1)
           [ECall "latch" [] [(Just "D", EVar "d"), (Just "E", EVar "e")]]])
 
+  -- always blocks
+  , "always block, indented body" ~:
+      parsesTo (unlines
+        [ "def notrace dff(D, CP) -> Q:"
+        , "\talways(posedge CP):"
+        , "\t\treturn D" ])
+        (Program [SDef (Def True [] "dff"
+            [("D", WConst 1), ("CP", WConst 1)] [("Q", Nothing)]
+            [BAlways [(Just PosEdge, EVar "CP")] [BReturn (EVar "D")]])])
+  , "always block, inline body" ~:
+      parsesTo "def notrace dff(D, CP) -> Q: always(posedge CP): return D"
+        (Program [SDef (Def True [] "dff"
+            [("D", WConst 1), ("CP", WConst 1)] [("Q", Nothing)]
+            [BAlways [(Just PosEdge, EVar "CP")] [BReturn (EVar "D")]])])
+  , "always block, inline on its own line" ~:
+      parsesTo (unlines
+        [ "def notrace f(D) -> Q:"
+        , "\talways(D): return D" ])
+        (Program [SDef (Def True [] "f" [("D", WConst 1)] [("Q", Nothing)]
+            [BAlways [(Nothing, EVar "D")] [BReturn (EVar "D")]])])
+  , "always block ends at a shallower line" ~:
+      parsesTo (unlines
+        [ "def notrace f(D) -> Q:"
+        , "\talways(posedge D):"
+        , "\t\treturn D"
+        , "\treturn D"
+        , "wire x = 1" ])
+        (Program [ SDef (Def True [] "f" [("D", WConst 1)] [("Q", Nothing)]
+                    [ BAlways [(Just PosEdge, EVar "D")] [BReturn (EVar "D")]
+                    , BReturn (EVar "D") ])
+                 , SWireInit False "x" (WConst 1) [EConst 1] ])
+  , "always with level, negedge and expression items" ~:
+      parsesTo (unlines
+        [ "def notrace f(D, E, A, B) -> Q:"
+        , "\talways(E, negedge A, posedge A|B):"
+        , "\t\treturn D" ])
+        (Program [SDef (Def True [] "f"
+            [("D", WConst 1), ("E", WConst 1), ("A", WConst 1), ("B", WConst 1)]
+            [("Q", Nothing)]
+            [BAlways [ (Nothing, EVar "E")
+                     , (Just NegEdge, EVar "A")
+                     , (Just PosEdge, EBin OpOr (EVar "A") (EVar "B")) ]
+              [BReturn (EVar "D")]])])
+  , "always body with a local wire" ~:
+      parsesTo (unlines
+        [ "def notrace f(D, CP) -> Q:"
+        , "\talways(posedge CP):"
+        , "\t\twire w = D & 1"
+        , "\t\treturn w" ])
+        (Program [SDef (Def True [] "f"
+            [("D", WConst 1), ("CP", WConst 1)] [("Q", Nothing)]
+            [BAlways [(Just PosEdge, EVar "CP")]
+              [ BWireInit False "w" (WConst 1)
+                  [EBin OpAnd (EVar "D") (EConst 1)]
+              , BReturn (EVar "w") ]])])
+
   -- named instantiations
   , "instance statement" ~:
       parsesTo "Lut<12345> l1,l2"
@@ -218,10 +274,12 @@ parserTests = TestList
                           ,(Nothing, EVar "c"), (Nothing, EVar "d")]]])
 
   -- failures
-  , "reject: reserved word as identifier" ~: pf "wire dff"
+  , "reject: reserved word as identifier" ~: pf "wire always"
   , "reject: reserved 'return'" ~: pf "wire w = return"
   , "reject: reserved 'const'" ~: pf "wire const"
   , "reject: reserved 'notrace'" ~: pf "wire notrace"
+  , "reject: reserved 'posedge'" ~: pf "wire posedge"
+  , "reject: reserved 'negedge'" ~: pf "wire negedge"
   , "reject: missing clock divisor" ~: pf "clk c1"
   , "reject: sequence in value list" ~: pf "wire w = 1010, 5"
   , "reject: def without body" ~: pf "def f(A) -> Y:"
@@ -238,7 +296,17 @@ parserTests = TestList
   , "reject: empty concatenation" ~: pf "wire w = {}"
   , "reject: parameters without a call" ~: pf "wire w = Lut<5>"
   , "reject: params on an indexed wire" ~: pf "wire w = a<5>[0]"
-  , "reject: dff with parameters" ~: pf "wire q = dff<3>(d, c1)"
+  , "reject: always at top level" ~: pf "always(posedge c1):\n\treturn 1"
+  , "reject: empty sensitivity list" ~:
+      pf "def notrace f(D) -> Q:\n\talways():\n\t\treturn D"
+  , "reject: nested always" ~:
+      pf "def notrace f(D) -> Q:\n\talways(posedge D):\n\t\talways(posedge D):\n\t\t\treturn D"
+  , "reject: output assign inside an always body" ~:
+      pf "def notrace f(D) -> Q:\n\talways(posedge D):\n\t\tQ = D"
+  , "reject: instance inside an always body" ~:
+      pf "def notrace f(D) -> Q:\n\talways(posedge D):\n\t\tg i1\n\t\treturn D"
+  , "reject: always without a body" ~:
+      pf "def notrace f(D) -> Q:\n\talways(posedge D):\nwire w = 1"
   , "reject: instance statement without names" ~: pf "Lut<5>"
   ]
  where

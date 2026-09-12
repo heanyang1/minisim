@@ -1,0 +1,6 @@
+# ERROR: always blocks are only allowed inside `def notrace` components
+def f(D) -> Q:
+	always(posedge D):
+		return D
+wire d = 1010
+wire bad = f(d)

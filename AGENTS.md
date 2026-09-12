@@ -20,14 +20,17 @@ renders that JSON to SVG. All deps are GHC boot libraries (parsec, containers, m
 
 Pipeline: `Minisim.Parser` (parsec) → `Minisim.Ast` → `Minisim.Elab` (elaboration
 to a flat `IExpr` driver graph, constants folded) → `Minisim.Sim` (per-timestamp
-event simulation; dff outputs first, then combinational wires via memoized DFS;
-combinational loops are errors) → `Minisim.WaveDrom` (JSON). CLI in `app/Main.hs`.
+simulation; memoized DFS over the wire graph, `always` blocks are the sequential
+elements — edge-triggered ones read only their t-1 state, level-sensitive ones
+are transparent; combinational loops are errors) → `Minisim.WaveDrom` (JSON).
+CLI in `app/Main.hs`.
 `--diagram` instead goes AST → `Minisim.Diagram` (HDElk JSON circuit diagram,
 built from the AST alone — no simulation length needed; `def notrace`
-components stay black boxes).
+components — the only ones allowed to contain `always` blocks — stay black
+boxes).
 
 - `src/Minisim/` — library modules; `test/` — HUnit suite (TestMain + one file per module)
-- `examples/*.hdl` — sample programs; `bad_*.hdl` are intentionally invalid (error-message checks); `multi_top.hdl` + `multi_lib.hdl` are a multi-input pair
+- `examples/*.hdl` — sample programs; `bad_*.hdl` are intentionally invalid (error-message checks); `dff.hdl` defines dff/latch/etc. with `always` blocks; `multi_top.hdl` + `multi_lib.hdl` are a multi-input pair
 - `README.md` — authoritative language spec (literals, x-propagation, clocks, components)
 - `.github/workflows/ci.yml` — CI does `cabal check`, build, test, smoke test, release binaries
 
