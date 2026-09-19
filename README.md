@@ -296,7 +296,10 @@ to match the simulator's timestamps.
 * wires -- clocks, bit-sequence / value-list drivers and constant-driven
   wires -- are drawn as input pins and (notched) constant nodes and carry
   no `type`; literals used inside expressions appear as shared constant
-  nodes. Only components (expressions, instances) and `const` declarations
+  nodes, while a literal wired straight into a component port (e.g.
+  `dff(0, c1)`) gets its own constant node per port
+  (`examples/tieoff.hdl` shows several tied-off inputs). Only components
+  (expressions, instances) and `const` declarations
   carry a `type`.
 * each instantiation of a user-defined component is one node carrying the
   component's ports (and `Name=value` parameters); its internals — the

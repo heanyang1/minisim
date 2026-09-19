@@ -82,6 +82,11 @@ srcs =
       [ "wire a = 1"
       , "wire b = 0"
       , "wire c = a & b" ])
+  , ("constargs", unlines
+      [ "def f(a) -> b: return a"
+      , "wire x = f(0)"
+      , "wire y = f(0)"
+      , "wire w = f(10)" ])
   , ("const", "const table = 12345\n")
   , ("valuelist", "wire w[2] = 0x3, 1\n")
   , ("pin", "wire din = 11001010\n")
@@ -126,6 +131,10 @@ diagramTests = TestList
       lacks "pin" "\"type\""
   , "constants are constant nodes" ~:
       has "const" "\"constant\": 1"
+  , "literal arguments get one constant node per port" ~: do
+      has "constargs" "[\"0\", \"x.a\"]"
+      has "constargs" "[\"0$1\", \"y.a\"]"
+      has "constargs" "[\"10\", \"w.a\"]"
   , "dff (user-defined) is a black-box leaf node" ~: do
       has "dff" "\"type\": \"dff\""
       has "dff" "\"inPorts\": [\"D\", \"CP\"]"

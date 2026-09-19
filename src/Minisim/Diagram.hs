@@ -213,6 +213,11 @@ addEdge src dst bus = modScope $ \s ->
 addPend :: Pend -> D ()
 addPend p = modScope $ \s -> s { scPend = p : scPend s }
 
+-- | Literal node fields: constants get the notched shape, waveform literals
+-- become input pins.
+litFields :: Bool -> [(String, JValue)]
+litFields isConst = [(if isConst then "constant" else "port", JInt 1)]
+
 -- | One shared node per literal text per container: constants get the notched
 -- shape, waveform literals become input pins.
 litNode :: Bool -> String -> D Src
@@ -221,9 +226,18 @@ litNode isConst txt = do
   let nid = boxName (scBox sc) txt
   nid' <- if S.member nid (scIds sc)
             then return nid
-            else addChild nid txt [if isConst then ("constant", JInt 1)
-                                               else ("port", JInt 1)]
+            else addChild nid txt (litFields isConst)
   return (Src nid' Nothing Nothing)
+
+-- | A literal node of one's own: every call adds a fresh node instead of
+-- sharing one per container, so each consumer visibly carries its own
+-- constant.  Ids are suffixed (@0@, @0$1@, @0$2@, ...); labels stay the
+-- literal text.
+litOwn :: Bool -> String -> D Src
+litOwn isConst txt = do
+  sc <- getScope
+  nid <- addChild (boxName (scBox sc) txt) txt (litFields isConst)
+  return (Src nid Nothing Nothing)
 
 setDriver :: Name -> Maybe Int -> [Src] -> D ()
 setDriver name Nothing srcs =
@@ -438,10 +452,10 @@ connectExpr e target = case e of
         refs <- collectRefs ie
         mapM_ (hookRef target) refs
   EConst n -> do
-    s <- litNode True (show n)
+    s <- litOwn True (show n)
     addEdge (srcEnd s) target False
   ESeq bs -> do
-    s <- litNode False (map bitCh bs)
+    s <- litOwn False (map bitCh bs)
     addEdge (srcEnd s) target False
   ECall c ps args -> do
     srcs <- mkInstance Nothing c ps args

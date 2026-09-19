@@ -1,0 +1,28 @@
+# Tie-offs: unused component inputs tied to identity constants.
+#
+# Constants wired straight into component ports -- every 0 and 1 below --
+# get one constant node per port in the circuit diagram (`make diagrams`):
+# three tied-off inputs draw three separate constant nodes, not one shared
+# 0/1 rail fanning out to all ports.
+
+clk c1 1
+
+def or4(A, B, C, D) -> Y: return A | B | C | D
+def and4(A, B, C, D) -> Y: return A & B & C & D
+def mux(S, A, B) -> Y: return S ? A : B
+
+def notrace dff(D, CP) -> Q:
+	always(posedge CP):
+		return D
+
+wire d = 11001010
+wire e = 00111100
+
+wire y = or4(d, 0, 0, 0)    # unused OR inputs tied low (three 0 ports)
+wire z = and4(e, 1, 1, 1)   # unused AND inputs tied high (three 1 ports)
+wire m = mux(y, z, 0)       # a tied-off data input
+
+# constants passed to a component instantiated inside another component get
+# their own nodes per instance as well (q$0, q$0$1, ... in the diagram)
+def hold(X) -> Q: return dff(or4(X, 0, 0, 0), c1)
+wire h = hold(d)
