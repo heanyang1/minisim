@@ -278,7 +278,7 @@ elabTests = TestList
         , "\talways(posedge CP):"
         , "\t\treturn D"
         , "wire q = f(d, c1)" ])
-      dDrivers d M.! "q" @?= IAlways 0 1 [SPos (IClock 1)] False (IWire "d")
+      dDrivers d M.! "q" @?= IAlways 0 1 (SPos (IClock 1)) False (IWire "d")
       M.size (dAlwayss d) @?= 1
   , "always: a level item makes the block transparent" ~: do
       d <- okD (unlines
@@ -287,7 +287,29 @@ elabTests = TestList
         , "\talways(E):"
         , "\t\treturn D"
         , "wire q = f(e, e)" ])
-      dDrivers d M.! "q" @=? IAlways 0 1 [SLvl (IWire "e")] True (IWire "e")
+      dDrivers d M.! "q" @=? IAlways 0 1 (SLvl (IWire "e")) True (IWire "e")
+  , "always: or sensitivity with a level item is transparent" ~: do
+      d <- okD (unlines
+        [ "sim 4", "clk c1 1", "wire d = 1010"
+        , "def notrace f(D, CP, E) -> Q:"
+        , "\talways(posedge CP or E):"
+        , "\t\treturn D"
+        , "wire q = f(d, c1, d)" ])
+      dDrivers d M.! "q"
+        @?= IAlways 0 1 (SEither (SPos (IClock 1)) (SLvl (IWire "d")))
+                    True (IWire "d")
+  , "always: and/or sensitivity elaborates to the condition tree" ~: do
+      d <- okD (unlines
+        [ "sim 4", "clk c1 1", "wire d = 1010"
+        , "def notrace f(D, A, B, C) -> Q:"
+        , "\talways(posedge A and (negedge B or C)):"
+        , "\t\treturn D"
+        , "wire q = f(d, c1, c1, c1)" ])
+      dDrivers d M.! "q"
+        @?= IAlways 0 1
+                    (SBoth (SPos (IClock 1))
+                           (SEither (SNeg (IClock 1)) (SLvl (IClock 1))))
+                    True (IWire "d")   -- the plain C item -> transparent
   , "always: locals are hoisted under an always. prefix" ~: do
       d <- okD (unlines
         [ "sim 4", "clk c1 1", "wire d = 1010"

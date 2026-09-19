@@ -119,17 +119,47 @@ simTests = TestList
       , "\t\treturn D"
       , "wire d = 11001010", "wire q = ndff(d, c1)" ])
       "q" "x1100111"
-  , "always: comma is AND (every item must hold)" ~: sim1 (unlines
+  , "always: `and` requires every item to hold" ~: sim1 (unlines
       [ "sim 8", "clk c1 1", "clk c2 2"
       , "def notrace f(D, A, B) -> Q:"
-      , "\talways(posedge A, posedge B):"
+      , "\talways(posedge A and posedge B):"
       , "\t\treturn D"
       , "wire d = 11001010", "wire q = f(d, c1, c2)" ])
       "q" "xxxx0000"   -- both edges only at t=1 (loads x) and t=5 (loads d4=0)
+  , "always: `or` fires when either item holds" ~: sim1 (unlines
+      [ "sim 8", "clk c1 1", "clk c2 2"
+      , "def notrace f(D, A, B) -> Q:"
+      , "\talways(posedge A or posedge B):"
+      , "\t\treturn D"
+      , "wire d = 11001010", "wire q = f(d, c1, c2)" ])
+      "q" "xx110000"   -- edges at t=1,3,5,7 (c1) and t=1,5 (c2)
+  , "always: parenthesized or nested under and" ~: sim1 (unlines
+      [ "sim 8", "clk c1 1"
+      , "def notrace f(D, A, B, C) -> Q:"
+      , "\talways(posedge A and (negedge B or posedge C)):"
+      , "\t\treturn D"
+      , "wire d = 11001010", "wire q = f(d, c1, c1, c1)" ])
+      "q" "xx110000"   -- every c1 rise pairs with the group's c1 fall/rise
+  , "always: a level item inside an or-group stays transparent" ~: sim1 (unlines
+      [ "sim 8", "clk c1 1"
+      , "def notrace m(D, CP, en) -> Q:"
+      , "\talways(posedge CP or en):"
+      , "\t\treturn D"
+      , "wire d = 01011010", "wire en = 10111000", "wire q = m(d, c1, en)" ])
+      "q" "00011111"   -- body at t while en=1 or on a rising edge
+  , "always: negedge and posedge (async_neg_dff shape)" ~: sim1 (unlines
+      [ "sim 8", "clk c1 1"
+      , "def notrace async_neg_dff(D, CP, E) -> Q:"
+      , "\talways(negedge CP and posedge E):"
+      , "\t\twire w = E ? D : 0"
+      , "\t\treturn w"
+      , "wire d = 01101001", "wire en = 01000000"
+      , "wire q = async_neg_dff(d, c1, en)" ])
+      "q" "x0000000"   -- fires at t=2 only, loading w1 = 0
   , "always: a level item makes the block transparent" ~: sim1 (unlines
       [ "sim 8", "clk c1 1"
       , "def notrace m(D, CP, en) -> Q:"
-      , "\talways(posedge CP, en):"
+      , "\talways(posedge CP and en):"
       , "\t\treturn D"
       , "wire d = 01011010", "wire en = 10111000", "wire q = m(d, c1, en)" ])
       "q" "00001111"   -- body at t on clocked timestamps while en=1

@@ -196,23 +196,28 @@ def notrace latch(D, E) -> Q:     # == the pre-0.2 built-in latch
 	always(E):
 		return D
 
-def notrace async_neg_dff(D, CP, E) -> Q:   # comma = AND
-	always(negedge CP, posedge E):
+def notrace async_neg_dff(D, CP, E) -> Q:   # and = both items must hold
+	always(negedge CP and posedge E):
 		wire w = E ? D : 0
 		return w
 ```
 
-The sensitivity list is a comma-separated **AND** of items (`or` sensitivity
-is not supported; the block is active only when *every* item holds at the
-same timestamp). Each item is a 1-bit expression:
+The sensitivity list is an `and`/`or` combination of items (`and` binds
+tighter than `or`; parenthesize to nest, e.g.
+`posedge a and (negedge b or posedge c)`; `,` is not a separator).  `and`
+and `or` are keywords only between two items -- elsewhere they stay ordinary
+names, so a wire or component may still be called `and` or `or`.  Each item
+is a 1-bit expression:
 
 * `posedge e` holds at `t` when `e` was `0` at `t-1` and is `1` at `t`;
   `negedge e` when it was `1` and is `0`;
-* a plain `e` is level-sensitive: it holds while `e` is `1` at `t` (and an
-  `x` value makes the block's output `x`, since its transparency is unknown).
+* a plain `e` is level-sensitive: it holds while `e` is `1` at `t` (an `x`
+  value leaves the condition unknown -- unless the rest of the `and`/`or`
+  tree already settles it -- and an unknown condition makes the block's
+  output `x`, since its transparency is unknown).
 
-When every item holds at `t` the block updates, otherwise it holds its
-previous value (the initial value is `x`):
+When the whole condition holds at `t` the block updates, otherwise it holds
+its previous value (the initial value is `x`):
 
 * **edge-triggered** (every item is `posedge`/`negedge`): the output becomes
   the value the `return` expression had at `t-1`, exactly like a dff sampling
@@ -260,7 +265,8 @@ See `examples/lut.hdl` for all of this in one place,
 * The pre-0.2 built-in `dff`/`latch` are gone: sequential elements are
   user-defined components with an `always` block (see "always blocks");
   `dff`/`latch` are ordinary names now, and `always`, `posedge` and `negedge`
-  are reserved words.
+  are reserved words (`and`/`or` are keywords only inside a sensitivity
+  list).
 * Added the `sim N` statement to set the simulation length explicitly.
 * Single `0`/`1` are constants; only 2+ digit `0`/`1` runs are waveforms
   (otherwise `wire a = 1` would silently mean "one timestamp long").

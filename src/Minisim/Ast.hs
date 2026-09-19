@@ -10,6 +10,7 @@ module Minisim.Ast
   , Expr(..)
   , BodyStmt(..)
   , Edge(..)
+  , SensItem(..)
   , Def(..)
   , Stmt(..)
   , Program(..)
@@ -81,6 +82,15 @@ data Expr
 data Edge = PosEdge | NegEdge
   deriving (Eq, Show)
 
+-- | The sensitivity condition of an @always@ block: 1-bit items
+-- ('SItem' with 'Nothing' edge = level sensitive) combined with
+-- @and@\/@or@ and parenthesized groups.
+data SensItem
+  = SItem (Maybe Edge) Expr -- ^ @posedge e@, @negedge e@ or a plain @e@
+  | SAnd SensItem SensItem  -- ^ @a and b@ (binds tighter than 'SOr')
+  | SOr SensItem SensItem   -- ^ @a or b@
+  deriving (Eq, Show)
+
 -- | A statement inside a component body.
 data BodyStmt
   = BReturn Expr             -- ^ @return expr@
@@ -89,10 +99,11 @@ data BodyStmt
   | BWireInit Bool Name Width [Expr] -- ^ @wire [notrace] a[n] = rhs@
   | BConst Bool (Maybe Width) Name Expr -- ^ @const [notrace] a[n] = const-expr@
   | BInst Name [Integer] [Name]    -- ^ @Comp<params> i1, i2, ...@: named instances
-  | BAlways [(Maybe Edge, Expr)] [BodyStmt]
-                             -- ^ @always(sens, ...): body@ -- sensitivity items
-                             -- ('Nothing' = level sensitive) and the block
-                             -- body, which ends in a single 'return'
+  | BAlways SensItem [BodyStmt]
+                             -- ^ @always(sens): body@ -- the sensitivity
+                             -- condition (edge\/level items combined with
+                             -- @and@\/@or@) and the block body, which ends
+                             -- in a single 'return'
   deriving (Eq, Show)
 
 data Def = Def

@@ -6,16 +6,18 @@
 -- a wire that can never be calculated is a combinational loop and an error.
 --
 -- An always block is the sequential element.  When the search first reaches
--- one it reads only its own state from @t-1@ and its sensitivity list at
--- @t@:
+-- one it reads only its own state from @t-1@ and its sensitivity condition
+-- at @t@:
 --
---   * an edge-triggered block (only posedge\/negedge items) updates its
---     output with the value its body had at @t-1@ when every item holds
+--   * an edge-triggered block (its condition has only posedge\/negedge
+--     items) updates its output with the value its body had at @t-1@ when
+--     the condition -- an @and@\/@or@ combination of the items -- holds
 --     (a dff: the body is not evaluated at @t@ at all, so feedback through
 --     the block's own output works);
---   * a level-sensitive block (at least one plain item) is transparent
---     while every item holds and evaluates its body with the current
---     values (a latch); a level item that is x makes the output x.
+--   * a level-sensitive block (its condition has at least one plain item)
+--     is transparent while the condition holds and evaluates its body with
+--     the current values (a latch); a level item whose x contribution the
+--     @and@\/@or@ tree cannot resolve makes the output x.
 --
 -- At the end of the timestamp each block's body is evaluated once (with all
 -- wires settled) and stored as the @t-1@ sample for the next step.
@@ -36,7 +38,7 @@ import qualified Data.Set as S
 import Data.List (intercalate)
 
 import Minisim.Ast
-import Minisim.Elab (Design(..), IExpr(..), Sens(..))
+import Minisim.Elab (Design(..), IExpr(..), Sens(..), sensLeaves)
 
 data SimResult = SimResult
   { srT      :: Int                       -- ^ number of timestamps
@@ -45,8 +47,8 @@ data SimResult = SimResult
   , srHist   :: M.Map Name [[Bit]]        -- ^ wire -> value at t = 1..T
   }
 
--- | always-block state: the sensitivity values, the body value and the
--- output, all from timestamp @t-1@.
+-- | always-block state: the values of the condition's leaves, the body
+-- value and the output, all from timestamp t-1.
 data AlwSt = AlwSt [[Bit]] [Bit] [Bit]
 
 data SState = SState
@@ -65,7 +67,8 @@ type S a = StateT SState (Either String) a
 runSim :: Design -> Either String SimResult
 runSim design = do
   let alw0 = M.fromList
-        [ (i, AlwSt (map (const [B0]) conds) (replicate w BX) (replicate w BX))
+        [ (i, AlwSt (map (const [B0]) (sensLeaves conds))
+                   (replicate w BX) (replicate w BX))
         | (i, (w, conds, _, _)) <- M.toList (dAlwayss design) ]
       s0 = SState
         { stDesign = design, stNow = 0, stMemo = M.empty, stGrey = S.empty
@@ -96,15 +99,10 @@ simStep t = do
   alws <- gets (dAlwayss . stDesign)
   forM_ (M.toList alws) $ \(i, (w, conds, lvl, body)) -> do
     q <- evalIExpr (IAlways i w conds lvl body)
-    cvs <- mapM (evalIExpr . sensExpr) conds
+    cvs <- mapM evalIExpr (sensLeaves conds)
     bv <- evalIExpr body
     modify' $ \s ->
       s { stAlways = M.insert i (AlwSt cvs bv q) (stAlways s) }
-
-sensExpr :: Sens -> IExpr
-sensExpr (SPos e) = e
-sensExpr (SNeg e) = e
-sensExpr (SLvl e) = e
 
 --------------------------------------------------------------------------------
 -- Evaluation
@@ -139,13 +137,39 @@ bitsIndex bs
  where vi B1 = 1 :: Integer
        vi _ = 0
 
--- | Does one sensitivity item hold at t?  @p@ is the item's value at t-1,
--- @c@ its value at t.
-condHolds :: [Bit] -> Sens -> [Bit] -> Bool
-condHolds p s c = case s of
-  SPos _ -> p == [B0] && c == [B1]
-  SNeg _ -> p == [B1] && c == [B0]
-  SLvl _ -> c == [B1]
+-- | Does the sensitivity condition hold at t?  'Just' gives the answer,
+-- 'Nothing' means unknown: an @x@ on a level item whose contribution the
+-- @and@\/@or@ tree cannot resolve.  @ps@\/@cs@ are the t-1\/t values of
+-- the condition's leaves, left to right.
+sensHolds :: Sens -> [[Bit]] -> [[Bit]] -> Maybe Bool
+sensHolds s ps cs = r
+ where
+  (r, _, _) = go s ps cs
+  go (SPos _) (p : ps') (c : cs') = (Just (p == [B0] && c == [B1]), ps', cs')
+  go (SNeg _) (p : ps') (c : cs') = (Just (p == [B1] && c == [B0]), ps', cs')
+  go (SLvl _) ps' (c : cs') = (bit3 c, drop 1 ps', cs')
+  go (SBoth a b) ps' cs' =
+    let (ra, p1, c1) = go a ps' cs'
+        (rb, p2, c2) = go b p1 c1
+    in (and3 ra rb, p2, c2)
+  go (SEither a b) ps' cs' =
+    let (ra, p1, c1) = go a ps' cs'
+        (rb, p2, c2) = go b p1 c1
+    in (or3 ra rb, p2, c2)
+  go _ ps' cs' = (Just False, ps', cs')  -- unreachable: leaves stay aligned
+  bit3 [B1] = Just True                   -- (a 1-bit value is 0, 1 or x)
+  bit3 [B0] = Just False
+  bit3 _ = Nothing
+  and3 (Just False) _ = Just False
+  and3 _ (Just False) = Just False
+  and3 Nothing _ = Nothing
+  and3 _ Nothing = Nothing
+  and3 _ _ = Just True
+  or3 (Just True) _ = Just True
+  or3 _ (Just True) = Just True
+  or3 Nothing _ = Nothing
+  or3 _ Nothing = Nothing
+  or3 _ _ = Just False
 
 -- | Evaluate an elaborated expression for the current timestamp.
 evalIExpr :: IExpr -> S [Bit]
@@ -188,13 +212,9 @@ evalIExpr e = case e of
   IAlways i w conds lvl body -> do
     m <- gets stAlways
     let AlwSt ps pb pq = M.findWithDefault (AlwSt [] [] []) i m
-    cvs <- mapM (evalIExpr . sensExpr) conds
-    -- a level item whose value is x makes the transparency unknown -> x
-    if any (\(s, v) -> case s of SLvl _ -> v == [BX]; _ -> False)
-           (zip conds cvs)
-      then return (replicate w BX)
-      else do
-        let holds = and [condHolds p s c | (s, p, c) <- zip3 conds ps cvs]
-        if holds
-          then if lvl then evalIExpr body else return pb
-          else return pq
+    cvs <- mapM evalIExpr (sensLeaves conds)
+    case sensHolds conds ps cvs of
+      -- an unknown condition leaves the block's transparency unknown -> x
+      Nothing -> return (replicate w BX)
+      Just False -> return pq
+      Just True -> if lvl then evalIExpr body else return pb

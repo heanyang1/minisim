@@ -14,6 +14,7 @@
 module Minisim.Elab
   ( IExpr(..)
   , Sens(..)
+  , sensLeaves
   , Design(..)
   , elaborate
   ) where
@@ -41,27 +42,39 @@ data IExpr
   | IBin BOp IExpr IExpr
   | IMux Int IExpr IExpr IExpr -- ^ width, cond, a, b
   | ICat [IExpr]               -- ^ concatenation, little-endian part order
-  | IAlways Int Int [Sens] Bool IExpr
-                              -- ^ always block: instance id, width,
-                              -- sensitivity list, has a level item
-                              -- (transparent) or only edges (triggered),
-                              -- and the 'return' expression
+  | IAlways Int Int Sens Bool IExpr
+                              -- ^ always block: instance id, width, the
+                              -- sensitivity condition, whether it contains
+                              -- a level item anywhere (transparent) or only
+                              -- edges (triggered), and the 'return' expression
   deriving (Eq, Show)
 
--- | One sensitivity-list item of an always block (each 1 bit wide).
+-- | The elaborated sensitivity condition of an always block (every leaf
+-- expression is 1 bit wide).
 data Sens
   = SPos IExpr                -- ^ @posedge e@: holds when e goes 0 -> 1
   | SNeg IExpr                -- ^ @negedge e@: holds when e goes 1 -> 0
-  | SLvl IExpr                -- ^ @e@: holds while e is 1 (an x makes the
-                              -- block's output x)
+  | SLvl IExpr                -- ^ @e@: holds while e is 1 (an x leaves the
+                              -- condition unknown)
+  | SBoth Sens Sens           -- ^ @a and b@: holds when both hold
+  | SEither Sens Sens         -- ^ @a or b@: holds when either holds
   deriving (Eq, Show)
+
+-- | The condition's leaf expressions, left to right.
+sensLeaves :: Sens -> [IExpr]
+sensLeaves (SPos e) = [e]
+sensLeaves (SNeg e) = [e]
+sensLeaves (SLvl e) = [e]
+sensLeaves (SBoth a b) = sensLeaves a ++ sensLeaves b
+sensLeaves (SEither a b) = sensLeaves a ++ sensLeaves b
 
 data Design = Design
   { dClocks  :: [(Name, Integer)]                -- ^ declaration order
   , dWires   :: [(Name, Int, Bool)]              -- ^ declaration order (name, width, traced)
   , dDrivers :: M.Map Name IExpr                 -- ^ one driver per wire
-  , dAlwayss :: M.Map Int (Int, [Sens], Bool, IExpr)
-                              -- ^ id -> (width, sensitivity, transparent, body)
+  , dAlwayss :: M.Map Int (Int, Sens, Bool, IExpr)
+                              -- ^ id -> (width, sensitivity condition,
+                              -- transparent, body)
   , dT       :: Int                              -- ^ number of timestamps
   , dWarn    :: [String]
   }
@@ -519,14 +532,7 @@ elabAlwaysDef def = case [s | s@(BAlways _ _) <- defBody def] of
       BConst{} -> return ()
       _ -> err ("only 'wire'/'const' declarations and one 'return' are allowed"
                 ++ " inside an always block (" ++ dn ++ ")")
-    conds <- forM sens $ \(me, e) -> do
-      (ie, w) <- elabExpr Nothing e
-      unless (w == 1) $
-        err ("a sensitivity item of " ++ show dn ++ " must be 1 bit wide")
-      return $ case me of
-        Just PosEdge -> SPos ie
-        Just NegEdge -> SNeg ie
-        Nothing -> SLvl ie
+    conds <- elabSens dn sens
     -- a sub-scope that only extends the hierarchical prefix
     old <- get
     let savedLocals = esLocals old
@@ -546,7 +552,7 @@ elabAlwaysDef def = case [s | s@(BAlways _ _) <- defBody def] of
                         , esLocals = savedLocals, esLocalConsts = savedConsts
                         , esLocalInsts = savedInsts }
     i <- freshId
-    return (Just (IAlways i w conds (any isLvl conds) be, w))
+    return (Just (IAlways i w conds (isLvl conds) be, w))
   _ -> err ("a component may contain at most one always block ("
             ++ defName def ++ ")")
  where
@@ -554,7 +560,25 @@ elabAlwaysDef def = case [s | s@(BAlways _ _) <- defBody def] of
   isResult (BAssign _ _) = True
   isResult _ = False
   isLvl SLvl{} = True
+  isLvl (SBoth a b) = isLvl a || isLvl b
+  isLvl (SEither a b) = isLvl a || isLvl b
   isLvl _ = False
+
+-- | Elaborate the sensitivity condition of an always block: every leaf
+-- item must be a 1-bit expression.
+elabSens :: Name -> SensItem -> E Sens
+elabSens dn = go
+ where
+  go (SItem me e) = do
+    (ie, w) <- elabExpr Nothing e
+    unless (w == 1) $
+      err ("a sensitivity item of " ++ show dn ++ " must be 1 bit wide")
+    return $ case me of
+      Just PosEdge -> SPos ie
+      Just NegEdge -> SNeg ie
+      Nothing -> SLvl ie
+  go (SAnd a b) = SBoth <$> go a <*> go b
+  go (SOr a b) = SEither <$> go a <*> go b
 
 -- | Pass 1 over a component body: register local declarations.
 bodyDecl :: BodyStmt -> E ()
@@ -853,10 +877,12 @@ maxLiteralLength = maximum . (0 :) . concatMap stmtLens
   bodyLens (BAssign _ e) = exprLens e
   bodyLens (BWireInit _ _ _ rhs) = listLens rhs ++ concatMap exprLens rhs
   bodyLens (BConst _ _ _ e) = exprLens e
-  bodyLens (BAlways sens body) =
-    concatMap (exprLens . snd) sens ++ concatMap bodyLens body
+  bodyLens (BAlways sens body) = sensLens sens ++ concatMap bodyLens body
   bodyLens (BWire _ _) = []
   bodyLens (BInst _ _ _) = []
+  sensLens (SItem _ e) = exprLens e
+  sensLens (SAnd a b) = sensLens a ++ sensLens b
+  sensLens (SOr a b) = sensLens a ++ sensLens b
   exprLens (ESeq bs) = [length bs]
   exprLens (EConst _) = []
   exprLens (EVar _) = []
@@ -890,13 +916,13 @@ simLength stmts =
 
 -- | Collect the always blocks reachable from the drivers (one instance per
 -- elaboration site; nested expressions are walked too).
-collectInstances :: [IExpr] -> [(Int, (Int, [Sens], Bool, IExpr))]
+collectInstances :: [IExpr] -> [(Int, (Int, Sens, Bool, IExpr))]
 collectInstances = foldMap go
  where
-  go :: IExpr -> [(Int, (Int, [Sens], Bool, IExpr))]
+  go :: IExpr -> [(Int, (Int, Sens, Bool, IExpr))]
   go (IAlways i w conds lvl body) =
     [(i, (w, conds, lvl, body))]
-    <> foldMap (go . sensE) conds <> go body
+    <> foldMap go (sensLeaves conds) <> go body
   go (IConstV _) = mempty
   go (IList _ _) = mempty
   go (ISeq _) = mempty
@@ -909,8 +935,3 @@ collectInstances = foldMap go
   go (IBin _ a b) = go a <> go b
   go (IMux _ c a b) = go c <> go a <> go b
   go (ICat es) = foldMap go es
-
-sensE :: Sens -> IExpr
-sensE (SPos e) = e
-sensE (SNeg e) = e
-sensE (SLvl e) = e

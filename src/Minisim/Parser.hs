@@ -361,7 +361,7 @@ alwaysStmt :: Maybe Int -> Parser BodyStmt
 alwaysStmt mcol = do
   keyword "always"; sp
   _ <- char '('; sp
-  sens <- sepBy1 sensItem (sp *> char ',' <* sp)
+  sens <- sensP
   sp; _ <- char ')'; sp
   _ <- char ':'; sp
   let indentedBody = case mcol of
@@ -376,15 +376,35 @@ alwaysStmt mcol = do
           <|> (finishLine *> indentedBody)
   return (BAlways sens body)
 
--- | One sensitivity-list item: @posedge e@, @negedge e@, or a plain
--- (level-sensitive) expression @e@.
-sensItem :: Parser (Maybe Edge, Expr)
-sensItem =
-  (do e <- (PosEdge <$ keyword "posedge") <|> (NegEdge <$ keyword "negedge")
-      sp1
-      ex <- exprP
-      return (Just e, ex))
-  <|> ((\ex -> (Nothing, ex)) <$> exprP)
+-- | The sensitivity condition of an @always@ block: @posedge@\/@negedge@/
+-- plain (level-sensitive) items combined with @and@\/@or@ (@and@ binds
+-- tighter than @or@); parenthesized groups nest, e.g.
+-- @posedge a and (negedge b or posedge c)@.  @and@\/@or@ are keywords only
+-- between two complete items -- elsewhere they stay ordinary names, so a
+-- wire or component may still be called @and@ or @or@.
+sensP :: Parser SensItem
+sensP = sensOrP
+
+sensOrP :: Parser SensItem
+sensOrP = chainl1 sensAndP (try (sp *> keyword "or" *> sp *> pure SOr))
+
+sensAndP :: Parser SensItem
+sensAndP = chainl1 sensAtomP (try (sp *> keyword "and" *> sp *> pure SAnd))
+
+-- | One sensitivity-list item or a parenthesized sub-condition.  A group
+-- that does not parse as a condition falls back to a plain item, whose
+-- expression grammar has parentheses of its own (e.g.
+-- @always((a|b) and c)@).
+sensAtomP :: Parser SensItem
+sensAtomP = edgeItem <|> sensGroup <|> plainItem
+ where
+  edgeItem = do
+    e <- (PosEdge <$ keyword "posedge") <|> (NegEdge <$ keyword "negedge")
+    sp1
+    ex <- exprP
+    return (SItem (Just e) ex)
+  sensGroup = try (char '(' *> sp *> sensP <* sp <* char ')')
+  plainItem = SItem Nothing <$> exprP
 
 -- | One indented always-body line; a line whose indentation is <= the
 -- @always@ keyword's column terminates the block.

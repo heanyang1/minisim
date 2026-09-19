@@ -212,18 +212,18 @@ parserTests = TestList
         , "\t\treturn D" ])
         (Program [SDef (Def True [] "dff"
             [("D", WConst 1), ("CP", WConst 1)] [("Q", Nothing)]
-            [BAlways [(Just PosEdge, EVar "CP")] [BReturn (EVar "D")]])])
+            [BAlways (SItem (Just PosEdge) (EVar "CP")) [BReturn (EVar "D")]])])
   , "always block, inline body" ~:
       parsesTo "def notrace dff(D, CP) -> Q: always(posedge CP): return D"
         (Program [SDef (Def True [] "dff"
             [("D", WConst 1), ("CP", WConst 1)] [("Q", Nothing)]
-            [BAlways [(Just PosEdge, EVar "CP")] [BReturn (EVar "D")]])])
+            [BAlways (SItem (Just PosEdge) (EVar "CP")) [BReturn (EVar "D")]])])
   , "always block, inline on its own line" ~:
       parsesTo (unlines
         [ "def notrace f(D) -> Q:"
         , "\talways(D): return D" ])
         (Program [SDef (Def True [] "f" [("D", WConst 1)] [("Q", Nothing)]
-            [BAlways [(Nothing, EVar "D")] [BReturn (EVar "D")]])])
+            [BAlways (SItem Nothing (EVar "D")) [BReturn (EVar "D")]])])
   , "always block ends at a shallower line" ~:
       parsesTo (unlines
         [ "def notrace f(D) -> Q:"
@@ -232,21 +232,58 @@ parserTests = TestList
         , "\treturn D"
         , "wire x = 1" ])
         (Program [ SDef (Def True [] "f" [("D", WConst 1)] [("Q", Nothing)]
-                    [ BAlways [(Just PosEdge, EVar "D")] [BReturn (EVar "D")]
+                    [ BAlways (SItem (Just PosEdge) (EVar "D")) [BReturn (EVar "D")]
                     , BReturn (EVar "D") ])
                  , SWireInit False "x" (WConst 1) [EConst 1] ])
   , "always with level, negedge and expression items" ~:
       parsesTo (unlines
         [ "def notrace f(D, E, A, B) -> Q:"
-        , "\talways(E, negedge A, posedge A|B):"
+        , "\talways(E and negedge A and posedge A|B):"
         , "\t\treturn D" ])
         (Program [SDef (Def True [] "f"
             [("D", WConst 1), ("E", WConst 1), ("A", WConst 1), ("B", WConst 1)]
             [("Q", Nothing)]
-            [BAlways [ (Nothing, EVar "E")
-                     , (Just NegEdge, EVar "A")
-                     , (Just PosEdge, EBin OpOr (EVar "A") (EVar "B")) ]
+            [BAlways (SAnd (SAnd (SItem Nothing (EVar "E"))
+                                 (SItem (Just NegEdge) (EVar "A")))
+                           (SItem (Just PosEdge)
+                                  (EBin OpOr (EVar "A") (EVar "B"))))
               [BReturn (EVar "D")]])])
+  , "always: and binds tighter than or" ~:
+      parsesTo (unlines
+        [ "def notrace f(A, B, C) -> Q:"
+        , "\talways(posedge A or posedge B and posedge C):"
+        , "\t\treturn A" ])
+        (Program [SDef (Def True [] "f"
+            [("A", WConst 1), ("B", WConst 1), ("C", WConst 1)] [("Q", Nothing)]
+            [BAlways (SOr (SItem (Just PosEdge) (EVar "A"))
+                          (SAnd (SItem (Just PosEdge) (EVar "B"))
+                                (SItem (Just PosEdge) (EVar "C"))))
+              [BReturn (EVar "A")]])])
+  , "always: parenthesized sensitivity group" ~:
+      parsesTo (unlines
+        [ "def notrace f(A, B, C) -> Q:"
+        , "\talways(posedge A and (negedge B or C)):"
+        , "\t\treturn A" ])
+        (Program [SDef (Def True [] "f"
+            [("A", WConst 1), ("B", WConst 1), ("C", WConst 1)] [("Q", Nothing)]
+            [BAlways (SAnd (SItem (Just PosEdge) (EVar "A"))
+                           (SOr (SItem (Just NegEdge) (EVar "B"))
+                                (SItem Nothing (EVar "C"))))
+              [BReturn (EVar "A")]])])
+  , "always: parenthesized expression inside a group" ~:
+      parsesTo (unlines
+        [ "def notrace f(A, B) -> Q:"
+        , "\talways((A|B) and A):"
+        , "\t\treturn A" ])
+        (Program [SDef (Def True [] "f"
+            [("A", WConst 1), ("B", WConst 1)] [("Q", Nothing)]
+            [BAlways (SAnd (SItem Nothing (EBin OpOr (EVar "A") (EVar "B")))
+                           (SItem Nothing (EVar "A")))
+              [BReturn (EVar "A")]])])
+  , "and/or stay ordinary names outside a sensitivity list" ~:
+      parsesTo "def or(A) -> Y: return A"
+        (Program [SDef (Def False [] "or" [("A", WConst 1)] [("Y", Nothing)]
+                        [BReturn (EVar "A")])])
   , "always body with a local wire" ~:
       parsesTo (unlines
         [ "def notrace f(D, CP) -> Q:"
@@ -255,7 +292,7 @@ parserTests = TestList
         , "\t\treturn w" ])
         (Program [SDef (Def True [] "f"
             [("D", WConst 1), ("CP", WConst 1)] [("Q", Nothing)]
-            [BAlways [(Just PosEdge, EVar "CP")]
+            [BAlways (SItem (Just PosEdge) (EVar "CP"))
               [ BWireInit False "w" (WConst 1)
                   [EBin OpAnd (EVar "D") (EConst 1)]
               , BReturn (EVar "w") ]])])
@@ -299,6 +336,10 @@ parserTests = TestList
   , "reject: always at top level" ~: pf "always(posedge c1):\n\treturn 1"
   , "reject: empty sensitivity list" ~:
       pf "def notrace f(D) -> Q:\n\talways():\n\t\treturn D"
+  , "reject: comma in a sensitivity list" ~:
+      pf "def notrace f(D) -> Q:\n\talways(posedge D, negedge D):\n\t\treturn D"
+  , "reject: and/or inside an edge item's expression" ~:
+      pf "def notrace f(D) -> Q:\n\talways(posedge (D and D)):\n\t\treturn D"
   , "reject: nested always" ~:
       pf "def notrace f(D) -> Q:\n\talways(posedge D):\n\t\talways(posedge D):\n\t\t\treturn D"
   , "reject: output assign inside an always body" ~:
